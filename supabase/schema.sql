@@ -1,4 +1,4 @@
--- DCD 1.0 / 1.0.5 - Esquema Supabase / PostgreSQL
+-- DCD 1.0 / 1.0.5.1 - Esquema Supabase / PostgreSQL
 -- Ejecutar en Supabase > SQL Editor > New query.
 -- Este SQL sirve tanto para proyecto nuevo como para actualizar la versión 1.0.
 

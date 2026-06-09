@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.5)
+# DATOS CAPACIDAD DOCENTE (DCD 1.0.5.1)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -17,6 +17,7 @@ Esta versión parte de la DCD 1.0 y añade:
 - Gestión de usuarios en Supabase con contraseñas hasheadas.
 - Usuarios vinculados a una unidad docente y borradores filtrados por unidad.
 - Reset de contraseña por administrador, sin visualizar contraseñas antiguas.
+- Corrección del selector de unidad docente en el panel de creación/actualización de usuarios.
 
 ## 1. Estructura del proyecto
 
@@ -132,7 +133,7 @@ Comandos habituales:
 
 ```bash
 git add .
-git commit -m "Actualizar DCD 1.0.5"
+git commit -m "Actualizar DCD 1.0.5.1"
 git push
 ```
 

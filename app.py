@@ -19,7 +19,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.5"
+APP_VERSION = "DCD 1.0.5.1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -1050,6 +1050,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.3:** Cierre estable: exportación más completa, estado finalizado y bloqueo suave de edición.")
     st.markdown("- **DCD 1.0.4:** Totales en Matriz_DCD y panel administrador para Excel consolidado desde Supabase.")
     st.markdown("- **DCD 1.0.5:** Usuarios por unidad docente, contraseñas hasheadas, reset por admin y borradores filtrados.")
+    st.markdown("- **DCD 1.0.5.1:** Corrección del selector de unidad docente al crear usuarios.")
 
 
 def page_change_password() -> None:
@@ -1611,23 +1612,26 @@ def render_admin_usuarios() -> None:
     st.markdown("---")
     st.markdown("### Crear o actualizar usuario")
 
+    role = st.selectbox("Rol", options=["usuario", "admin"], key="admin_user_role")
+    area = ""
+    unidad_docente = ""
+
+    if role != "admin":
+        area = st.selectbox("Área asignada", options=[""] + AREA_OPTIONS, key="admin_user_area")
+        direccion_options = DIRECCIONES_POR_AREA.get(area, [])
+        unidad_docente = st.selectbox("Unidad docente asignada", options=[""] + direccion_options, key="admin_user_unidad")
+    else:
+        st.info("Los usuarios administradores no quedan vinculados a una unidad docente concreta.")
+
     with st.form("form_usuario"):
         username = st.text_input("Usuario", placeholder="chuimi")
         display_name = st.text_input("Nombre visible", placeholder="CHUIMI")
-        role = st.selectbox("Rol", options=["usuario", "admin"])
         activo = st.checkbox("Usuario activo", value=True)
         must_change = st.checkbox("Obligar a cambiar contraseña en el primer acceso", value=True)
-
-        area = st.selectbox("Área asignada", options=[""] + AREA_OPTIONS)
-        direccion_options = DIRECCIONES_POR_AREA.get(area, [])
-        unidad_docente = st.selectbox("Unidad docente asignada", options=[""] + direccion_options)
         password = st.text_input("Contraseña temporal", type="password")
 
         submitted = st.form_submit_button("Guardar usuario")
         if submitted:
-            if role == "admin":
-                area = ""
-                unidad_docente = ""
             ok, msg = save_user_to_supabase(
                 username=username,
                 display_name=display_name,
