@@ -1,6 +1,8 @@
 import io
+import hashlib
 import json
 import re
+import secrets as py_secrets
 from datetime import datetime
 from pathlib import Path
 
@@ -17,7 +19,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.4"
+APP_VERSION = "DCD 1.0.5"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -134,6 +136,10 @@ def init_session_state() -> None:
         "current_user": "",
         "current_user_role": "",
         "current_user_display": "",
+        "current_user_area": "",
+        "current_user_unidad": "",
+        "current_user_codigo_unidad": "",
+        "must_change_password": False,
         "current_step": 1,
         "info_understood": False,
         "area_selected": "",
@@ -268,11 +274,67 @@ def get_users_config() -> dict:
     return default_users
 
 
+def is_admin() -> bool:
+    return st.session_state.get("current_user_role") == "admin"
+
+
+def user_scope_unidad() -> str:
+    return st.session_state.get("current_user_unidad", "")
+
+
+def hash_password(password: str, salt: str | None = None, iterations: int = 200000) -> str:
+    salt = salt or py_secrets.token_hex(16)
+    password_bytes = (password or "").encode("utf-8")
+    derived = hashlib.pbkdf2_hmac("sha256", password_bytes, salt.encode("utf-8"), iterations)
+    return f"pbkdf2_sha256${iterations}${salt}${derived.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, iterations, salt, expected = stored_hash.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        candidate = hash_password(password, salt=salt, iterations=int(iterations)).split("$", 3)[3]
+        return py_secrets.compare_digest(candidate, expected)
+    except Exception:
+        return False
+
+
+def get_user_from_supabase(username: str) -> dict | None:
+    client = get_supabase_client()
+    if client is None:
+        return None
+
+    try:
+        resp = client.table("dcd_usuarios").select("*").eq("username", username).limit(1).execute()
+        rows = getattr(resp, "data", []) or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+
 def login_user(username: str, password: str) -> tuple[bool, str]:
-    users = get_users_config()
     username = (username or "").strip()
     password = password or ""
 
+    db_user = get_user_from_supabase(username)
+    if db_user:
+        if not db_user.get("activo", True):
+            return False, "Usuario desactivado."
+        if not verify_password(password, db_user.get("password_hash", "")):
+            return False, "Usuario o contraseña incorrectos."
+
+        st.session_state.logged_in = True
+        st.session_state.current_user = username
+        st.session_state.current_user_role = str(db_user.get("role", "usuario"))
+        st.session_state.current_user_display = str(db_user.get("display_name", username))
+        st.session_state.current_user_area = normalizar_area(str(db_user.get("area", "") or ""))
+        st.session_state.current_user_unidad = str(db_user.get("unidad_docente", "") or "")
+        st.session_state.current_user_codigo_unidad = str(db_user.get("codigo_unidad", "") or "")
+        st.session_state.must_change_password = bool(db_user.get("must_change_password", False))
+        return True, "Acceso correcto."
+
+    users = get_users_config()
     if username not in users:
         return False, "Usuario o contraseña incorrectos."
 
@@ -285,6 +347,10 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
     st.session_state.current_user = username
     st.session_state.current_user_role = str(user_data.get("role", "usuario"))
     st.session_state.current_user_display = str(user_data.get("display_name", username))
+    st.session_state.current_user_area = normalizar_area(str(user_data.get("area", "") or ""))
+    st.session_state.current_user_unidad = str(user_data.get("unidad_docente", "") or "")
+    st.session_state.current_user_codigo_unidad = str(user_data.get("codigo_unidad", "") or "")
+    st.session_state.must_change_password = False
     return True, "Acceso correcto."
 
 
@@ -397,6 +463,7 @@ def registros_to_rows(estado: str = "borrador") -> list[dict]:
             "unidad_docente": unidad,
             "codigo_unidad": codigo_unidad,
             "columna_excel": columna_excel,
+            "usuario_propietario": st.session_state.get("current_user", ""),
             "nivel_i": item["Nivel Estudio I"],
             "nivel_ii": item["Nivel Estudio II"],
             "rama": item["Rama"],
@@ -412,6 +479,9 @@ def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
         return False, "Supabase no está configurado todavía. Puedes seguir usando el MVP local y descargar el Excel."
 
     unidad = st.session_state.direccion_selected
+    if not is_admin() and user_scope_unidad() and unidad != user_scope_unidad():
+        return False, "No puede guardar datos de una unidad docente distinta a la asignada a su usuario."
+
     codigo_borrador = st.session_state.codigo_borrador or build_codigo_borrador(unidad)
     st.session_state.codigo_borrador = codigo_borrador
     codigo_unidad = CODIGOS_DIRECCION.get(unidad, safe_code(unidad))
@@ -426,6 +496,8 @@ def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
                 "unidad_docente": unidad,
                 "codigo_unidad": codigo_unidad,
                 "observaciones": st.session_state.get("observaciones", ""),
+                "usuario_propietario": st.session_state.get("current_user", ""),
+                "usuario_ultima_edicion": st.session_state.get("current_user", ""),
             },
             on_conflict="codigo_borrador",
         ).execute()
@@ -459,6 +531,9 @@ def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
             return False, "No se encontró ese código de borrador."
 
         borrador = borradores[0]
+        if not is_admin() and user_scope_unidad() and borrador.get("unidad_docente", "") != user_scope_unidad():
+            return False, "No puede cargar un borrador de una unidad docente distinta a la asignada a su usuario."
+
         registros_resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo_borrador).execute()
         rows = getattr(registros_resp, "data", []) or []
 
@@ -491,11 +566,113 @@ def list_drafts_from_supabase() -> list[str]:
     if client is None:
         return []
     try:
-        resp = client.table("dcd_borradores").select("codigo_borrador, updated_at, estado").order("updated_at", desc=True).limit(50).execute()
+        query = client.table("dcd_borradores").select("codigo_borrador, updated_at, estado, unidad_docente")
+        if not is_admin() and user_scope_unidad():
+            query = query.eq("unidad_docente", user_scope_unidad())
+        resp = query.order("updated_at", desc=True).limit(50).execute()
         rows = getattr(resp, "data", []) or []
         return [f"{r['codigo_borrador']} | {r.get('estado', '')} | {r.get('updated_at', '')}" for r in rows]
     except Exception:
         return []
+
+
+def list_users_from_supabase() -> list[dict]:
+    client = get_supabase_client()
+    if client is None:
+        return []
+    try:
+        resp = client.table("dcd_usuarios").select(
+            "username, display_name, role, area, unidad_docente, codigo_unidad, activo, must_change_password, updated_at"
+        ).order("username").execute()
+        return getattr(resp, "data", []) or []
+    except Exception:
+        return []
+
+
+def save_user_to_supabase(
+    username: str,
+    display_name: str,
+    role: str,
+    area: str,
+    unidad_docente: str,
+    password: str,
+    activo: bool = True,
+    must_change_password: bool = True,
+) -> tuple[bool, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado."
+
+    username = (username or "").strip().lower()
+    if not username:
+        return False, "Debe indicar un nombre de usuario."
+    if not password:
+        return False, "Debe indicar una contraseña temporal."
+    if role != "admin" and not unidad_docente:
+        return False, "Los usuarios no administradores deben tener una unidad docente asignada."
+
+    codigo_unidad = CODIGOS_DIRECCION.get(unidad_docente, safe_code(unidad_docente)) if unidad_docente else ""
+
+    try:
+        client.table("dcd_usuarios").upsert({
+            "username": username,
+            "display_name": display_name or username,
+            "role": role,
+            "area": normalizar_area(area or ""),
+            "unidad_docente": unidad_docente or "",
+            "codigo_unidad": codigo_unidad,
+            "password_hash": hash_password(password),
+            "activo": activo,
+            "must_change_password": must_change_password,
+        }, on_conflict="username").execute()
+        audit_event("guardar_usuario", f"Usuario: {username} | Rol: {role}")
+        return True, f"Usuario guardado correctamente: {username}"
+    except Exception as exc:
+        return False, f"Error al guardar usuario: {exc}"
+
+
+def reset_user_password(username: str, new_password: str, must_change_password: bool = True) -> tuple[bool, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado."
+    username = (username or "").strip().lower()
+    if not username or not new_password:
+        return False, "Debe indicar usuario y nueva contraseña."
+    try:
+        client.table("dcd_usuarios").update({
+            "password_hash": hash_password(new_password),
+            "must_change_password": must_change_password,
+        }).eq("username", username).execute()
+        audit_event("reset_password", f"Usuario: {username}")
+        return True, f"Contraseña reseteada para: {username}"
+    except Exception as exc:
+        return False, f"Error al resetear contraseña: {exc}"
+
+
+def set_user_active(username: str, active: bool) -> tuple[bool, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado."
+    username = (username or "").strip().lower()
+    if not username:
+        return False, "Debe indicar un usuario."
+    try:
+        client.table("dcd_usuarios").update({"activo": active}).eq("username", username).execute()
+        audit_event("activar_usuario" if active else "desactivar_usuario", f"Usuario: {username}")
+        return True, f"Usuario {'activado' if active else 'desactivado'}: {username}"
+    except Exception as exc:
+        return False, f"Error al actualizar usuario: {exc}"
+
+
+def change_current_user_password(new_password: str, repeat_password: str) -> tuple[bool, str]:
+    if not new_password or len(new_password) < 8:
+        return False, "La nueva contraseña debe tener al menos 8 caracteres."
+    if new_password != repeat_password:
+        return False, "Las contraseñas no coinciden."
+    ok, msg = reset_user_password(st.session_state.get("current_user", ""), new_password, must_change_password=False)
+    if ok:
+        st.session_state.must_change_password = False
+    return ok, msg
 
 
 # =========================================================
@@ -822,6 +999,8 @@ def app_sidebar() -> None:
     if st.session_state.get("current_user_display"):
         st.sidebar.write(f"Usuario: {st.session_state.current_user_display}")
         st.sidebar.caption(f"Rol: {st.session_state.get('current_user_role', '')}")
+        if st.session_state.get("current_user_unidad"):
+            st.sidebar.caption(f"Unidad asignada: {st.session_state.current_user_unidad}")
 
     if supabase_available():
         st.sidebar.success("Supabase configurado")
@@ -870,6 +1049,24 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.2:** Ajuste de áreas: Hospital, Atención Familiar y Comunitaria, y retirada de Otras Unidades Docentes.")
     st.markdown("- **DCD 1.0.3:** Cierre estable: exportación más completa, estado finalizado y bloqueo suave de edición.")
     st.markdown("- **DCD 1.0.4:** Totales en Matriz_DCD y panel administrador para Excel consolidado desde Supabase.")
+    st.markdown("- **DCD 1.0.5:** Usuarios por unidad docente, contraseñas hasheadas, reset por admin y borradores filtrados.")
+
+
+def page_change_password() -> None:
+    st.title(APP_TITLE)
+    st.subheader("Cambio obligatorio de contraseña")
+    st.warning("Su usuario tiene una contraseña temporal. Debe cambiarla antes de continuar.")
+
+    new_password = st.text_input("Nueva contraseña", type="password")
+    repeat_password = st.text_input("Repetir nueva contraseña", type="password")
+
+    if st.button("Guardar nueva contraseña"):
+        ok, msg = change_current_user_password(new_password, repeat_password)
+        if ok:
+            st.success("Contraseña actualizada correctamente. Ya puede continuar.")
+            st.rerun()
+        else:
+            st.error(msg)
 
 
 def page_instrucciones() -> None:
@@ -917,6 +1114,48 @@ def page_seleccion_unidad() -> None:
     st.header("Paso 2: Selección de Área y Unidad Docente")
 
     st.session_state.area_selected = normalizar_area(st.session_state.area_selected)
+
+    if not is_admin() and user_scope_unidad():
+        st.session_state.area_selected = st.session_state.get("current_user_area", "")
+        st.session_state.direccion_selected = user_scope_unidad()
+        st.session_state.codigo_borrador = build_codigo_borrador(st.session_state.direccion_selected)
+        st.info("Su usuario está vinculado a esta unidad docente. Solo podrá crear, cargar y modificar borradores de esta unidad.")
+        st.markdown(f"**Área asignada:** {st.session_state.area_selected}")
+        st.markdown(f"**Unidad docente asignada:** {st.session_state.direccion_selected}")
+
+        col_next, col_back = st.columns(2)
+        with col_next:
+            if st.button("Continuar con mi unidad docente"):
+                st.session_state.current_step = 3
+                st.rerun()
+        with col_back:
+            if st.button("ATRÁS"):
+                st.session_state.current_step = 1
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("Cargar borrador existente")
+        if supabase_available():
+            drafts = list_drafts_from_supabase()
+            if drafts:
+                selected = st.selectbox("Borradores disponibles", options=[""] + drafts)
+                codigo = selected.split(" | ")[0] if selected else ""
+                if st.button("Cargar borrador"):
+                    if codigo:
+                        ok, msg = load_draft_from_supabase(codigo)
+                        if ok:
+                            st.success(msg)
+                            st.session_state.current_step = 4
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Debe seleccionar un código de borrador.")
+            else:
+                st.info("No se encontraron borradores guardados de su unidad docente.")
+        else:
+            st.info("Supabase no está configurado. No se pueden cargar borradores guardados.")
+        return
 
     st.session_state.area_selected = st.selectbox(
         "**SELECCIONE ÁREA**",
@@ -1292,15 +1531,8 @@ def page_resumen_descarga() -> None:
     st.caption("Si Mailgun no está configurado, el botón de correo mostrará un aviso y podrá seguir usando la descarga manual.")
 
 
-def page_admin_consolidado() -> None:
-    st.header("Panel administrador: consolidado DCD")
-
-    if st.session_state.get("current_user_role") != "admin":
-        st.error("Esta pantalla solo está disponible para usuarios administradores.")
-        if st.button("Volver"):
-            st.session_state.current_step = 2
-            st.rerun()
-        return
+def render_admin_consolidado() -> None:
+    st.subheader("Consolidado DCD")
 
     st.markdown(
         """
@@ -1361,6 +1593,106 @@ def page_admin_consolidado() -> None:
         else:
             st.warning(msg)
 
+
+def render_admin_usuarios() -> None:
+    st.subheader("Usuarios y permisos")
+    st.info("Las contraseñas se guardan hasheadas. El administrador puede resetearlas, pero no verlas.")
+
+    if not supabase_available():
+        st.warning("Supabase no está configurado. No se pueden gestionar usuarios.")
+        return
+
+    users = list_users_from_supabase()
+    if users:
+        st.dataframe(pd.DataFrame(users), use_container_width=True, hide_index=True)
+    else:
+        st.warning("No se encontraron usuarios en Supabase. Puede crear el primer usuario admin desde este panel usando el acceso actual.")
+
+    st.markdown("---")
+    st.markdown("### Crear o actualizar usuario")
+
+    with st.form("form_usuario"):
+        username = st.text_input("Usuario", placeholder="chuimi")
+        display_name = st.text_input("Nombre visible", placeholder="CHUIMI")
+        role = st.selectbox("Rol", options=["usuario", "admin"])
+        activo = st.checkbox("Usuario activo", value=True)
+        must_change = st.checkbox("Obligar a cambiar contraseña en el primer acceso", value=True)
+
+        area = st.selectbox("Área asignada", options=[""] + AREA_OPTIONS)
+        direccion_options = DIRECCIONES_POR_AREA.get(area, [])
+        unidad_docente = st.selectbox("Unidad docente asignada", options=[""] + direccion_options)
+        password = st.text_input("Contraseña temporal", type="password")
+
+        submitted = st.form_submit_button("Guardar usuario")
+        if submitted:
+            if role == "admin":
+                area = ""
+                unidad_docente = ""
+            ok, msg = save_user_to_supabase(
+                username=username,
+                display_name=display_name,
+                role=role,
+                area=area,
+                unidad_docente=unidad_docente,
+                password=password,
+                activo=activo,
+                must_change_password=must_change,
+            )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+    st.markdown("---")
+    st.markdown("### Resetear contraseña / activar usuario")
+    usernames = [u.get("username", "") for u in users if u.get("username")]
+    selected_user = st.selectbox("Usuario existente", options=[""] + usernames)
+    new_password = st.text_input("Nueva contraseña temporal", type="password", key="admin_reset_password")
+
+    col_reset, col_activate, col_deactivate = st.columns(3)
+    with col_reset:
+        if st.button("Resetear contraseña"):
+            ok, msg = reset_user_password(selected_user, new_password, must_change_password=True)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+    with col_activate:
+        if st.button("Activar"):
+            ok, msg = set_user_active(selected_user, True)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+    with col_deactivate:
+        if st.button("Desactivar"):
+            if selected_user == st.session_state.get("current_user"):
+                st.warning("No puede desactivar el usuario con el que está trabajando ahora mismo.")
+            else:
+                ok, msg = set_user_active(selected_user, False)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
+
+def page_admin_consolidado() -> None:
+    st.header("Panel administrador")
+
+    if st.session_state.get("current_user_role") != "admin":
+        st.error("Esta pantalla solo está disponible para usuarios administradores.")
+        if st.button("Volver"):
+            st.session_state.current_step = 2
+            st.rerun()
+        return
+
+    tab_consolidado, tab_usuarios = st.tabs(["Consolidado", "Usuarios"])
+    with tab_consolidado:
+        render_admin_consolidado()
+    with tab_usuarios:
+        render_admin_usuarios()
+
+    st.markdown("---")
     if st.button("Volver al aplicativo"):
         st.session_state.current_step = 2
         st.rerun()
@@ -1373,6 +1705,10 @@ init_session_state()
 
 if not st.session_state.logged_in:
     page_login()
+    st.stop()
+
+if st.session_state.get("must_change_password"):
+    page_change_password()
     st.stop()
 
 st.title(APP_TITLE)
