@@ -17,7 +17,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.1"
+APP_VERSION = "DCD 1.0.2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -34,19 +34,18 @@ st.set_page_config(
 # Reutiliza la estructura del aplicativo de residentes y añade mapeo a columnas del Excel.
 # =========================================================
 AREA_OPTIONS = [
-    "UNIDAD DOCENTE DE CENTRO HOSPITALARIO",
-    "UNIDAD DOCENTE MULTIPROFESIONAL DE ATENCION FAMILIAR Y COMUNITARIA",
-    "OTRAS UNIDADES DOCENTES",
+    "HOSPITAL",
+    "ATENCION FAMILIAR Y COMUNITARIA",
 ]
 
 DIRECCIONES_POR_AREA = {
-    "UNIDAD DOCENTE DE CENTRO HOSPITALARIO": [
+    "HOSPITAL": [
         "DIRECCIÓN GERENCIA HOSPITAL DOCTOR NEGRIN",
         "DIRECCIÓN GERENCIA COMPLEJO HOSPITALARIO UNIVERSITARIO Y MATERNO INFANTIL",
         "DIRECCIÓN GERENCIA COMPLEJO HOSPITALARIO UNIVERSITARIO DE CANARIAS",
         "DIRECCIÓN GERENCIA HOSPITAL NUESTRA SEÑORA DE CANDELARIA",
     ],
-    "UNIDAD DOCENTE MULTIPROFESIONAL DE ATENCION FAMILIAR Y COMUNITARIA": [
+    "ATENCION FAMILIAR Y COMUNITARIA": [
         "GERENCIA DE ATENCIÓN PRIMARIA DE GRAN CANARIA",
         "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE",
         "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR",
@@ -56,6 +55,11 @@ DIRECCIONES_POR_AREA = {
         "GERENCIA DE SERVICIOS SANITARIOS DE LA GOMERA",
         "GERENCIA DE SERVICIOS SANITARIOS DE EL HIERRO",
     ],
+}
+
+LEGACY_AREA_MAP = {
+    "UNIDAD DOCENTE DE CENTRO HOSPITALARIO": "HOSPITAL",
+    "UNIDAD DOCENTE MULTIPROFESIONAL DE ATENCION FAMILIAR Y COMUNITARIA": "ATENCION FAMILIAR Y COMUNITARIA",
 }
 
 CODIGOS_DIRECCION = {
@@ -71,6 +75,15 @@ CODIGOS_DIRECCION = {
     "GERENCIA DE SERVICIOS SANITARIOS DE LA PALMA": "GSSLP",
     "GERENCIA DE SERVICIOS SANITARIOS DE LA GOMERA": "GSSLG",
     "GERENCIA DE SERVICIOS SANITARIOS DE EL HIERRO": "GSSEH",
+    "UNIDAD DOCENTE MULTIPROFESIONAL DE SALUD MENTAL DE GRAN CANARIA": "UDM_SM_GC",
+    "UNIDAD DOCENTE MULTIPROFESIONAL DE SALUF MENTAL DE TENERIFE": "UDM_SM_TF",
+    "UNIDAD DOCENTE MULTIPROFESIONAL DE SALUD LABORAL": "UDM_SL",
+    "UNIDAD DOCENTE MULTIPROFESIONAL DE OBSTETRICIA Y GINECOLOGIA DEL CHUIMI": "UDM_OG_CHUIMI",
+    "UNIDAD DOCENTE MULTIPROFESIONAL DE PEDIATRIA DEL CHUIMI": "UDM_PED_CHUIMI",
+    "UNIDAD DOCENTE MULTIPROFESIONAL DE PEDIATRIA DEL HUNSC": "UDM_PED_HUNSC",
+    "UNIDAD DOCENTE MULTIPROFESIONAL DE PEDIATRIA DEL HUC": "UDM_PED_HUC",
+    "UNIDAD DOCENTE DE ENFERMERIA OBSTETRICA-GINECOLOGICA DE TENERIFE": "UD_ENFOG_TF",
+    "UNIDAD DOCENTE DE MEDICINA PREVENTIVA Y SALUD PUBLICA": "UD_MPYSP",
 }
 
 # Mapeo de unidad docente a columna existente en el Excel.
@@ -128,6 +141,10 @@ def reset_selectores_estudio() -> None:
     st.session_state.sel_rama = ""
     st.session_state.sel_titulacion = ""
     st.session_state.numero_alumnos = 0
+
+
+def normalizar_area(area: str) -> str:
+    return LEGACY_AREA_MAP.get(area, area)
 
 
 def reset_downstream(level: str) -> None:
@@ -418,7 +435,7 @@ def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
         registros_resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo_borrador).execute()
         rows = getattr(registros_resp, "data", []) or []
 
-        st.session_state.area_selected = borrador.get("area", "")
+        st.session_state.area_selected = normalizar_area(borrador.get("area", ""))
         st.session_state.direccion_selected = borrador.get("unidad_docente", "")
         st.session_state.codigo_borrador = codigo_borrador
         st.session_state.observaciones = borrador.get("observaciones", "") or ""
@@ -582,6 +599,7 @@ def page_login() -> None:
     st.markdown("##### Historial de versiones")
     st.markdown("- **DCD 1.0:** MVP inicial con contraseña, instrucciones, selección de unidad docente, selectores dependientes y preparación para Supabase.")
     st.markdown("- **DCD 1.0.1:** Pantalla de recordatorio, correo automático opcional, usuarios configurables, auditoría y revisión de mapeo.")
+    st.markdown("- **DCD 1.0.2:** Ajuste de áreas: Hospital, Atención Familiar y Comunitaria, y retirada de Otras Unidades Docentes.")
 
 
 def page_instrucciones() -> None:
@@ -627,6 +645,8 @@ def page_instrucciones() -> None:
 
 def page_seleccion_unidad() -> None:
     st.header("Paso 2: Selección de Área y Unidad Docente")
+
+    st.session_state.area_selected = normalizar_area(st.session_state.area_selected)
 
     st.session_state.area_selected = st.selectbox(
         "**SELECCIONE ÁREA**",
