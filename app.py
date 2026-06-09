@@ -17,7 +17,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.2"
+APP_VERSION = "DCD 1.0.4"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -104,6 +104,25 @@ COLUMNA_EXCEL_POR_DIRECCION = {
 }
 
 KEY_COLUMNS = ["Nivel Estudio I", "Nivel Estudio II", "Rama", "Titulación"]
+MATRIX_VALUE_COLUMNS = [
+    "CHUIMI",
+    "HUGC DN",
+    "GAP GC",
+    "Gran Canaria",
+    "GSS FV",
+    "GSS LZ",
+    "Las Palmas",
+    "CHUC",
+    "HUNSC",
+    "GAP TF",
+    "Tenerife",
+    "GSS LP",
+    "GSS LG",
+    "GSS EH",
+    "S/C Tenerife",
+    "Total",
+]
+DERIVED_MATRIX_COLUMNS = {"Gran Canaria", "Las Palmas", "Tenerife", "S/C Tenerife", "Total"}
 
 
 # =========================================================
@@ -127,6 +146,8 @@ def init_session_state() -> None:
         "sel_titulacion": "",
         "numero_alumnos": 0,
         "codigo_borrador": "",
+        "draft_estado": "borrador",
+        "permitir_editar_finalizado": False,
         "observaciones": "",
         "last_message": "",
     }
@@ -414,7 +435,13 @@ def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
         if rows:
             client.table("dcd_registros").insert(rows).execute()
 
+        st.session_state.draft_estado = estado
+        if estado == "finalizado":
+            st.session_state.permitir_editar_finalizado = False
+
         audit_event("guardar_borrador" if estado == "borrador" else "guardar_finalizado", f"Estado: {estado}. Registros: {len(rows)}", codigo_borrador)
+        if estado == "finalizado":
+            return True, f"Expediente finalizado correctamente: {codigo_borrador}"
         return True, f"Borrador guardado correctamente: {codigo_borrador}"
     except Exception as exc:
         return False, f"Error al guardar en Supabase: {exc}"
@@ -438,6 +465,8 @@ def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
         st.session_state.area_selected = normalizar_area(borrador.get("area", ""))
         st.session_state.direccion_selected = borrador.get("unidad_docente", "")
         st.session_state.codigo_borrador = codigo_borrador
+        st.session_state.draft_estado = borrador.get("estado", "borrador") or "borrador"
+        st.session_state.permitir_editar_finalizado = False
         st.session_state.observaciones = borrador.get("observaciones", "") or ""
         st.session_state.registros = {}
 
@@ -472,26 +501,87 @@ def list_drafts_from_supabase() -> list[str]:
 # =========================================================
 # EXPORTACIÓN A EXCEL
 # =========================================================
+def formula_total_columna(col_letter: str, first_excel_row: int = 2, last_excel_row: int = 196) -> str:
+    return f"=SUM({col_letter}{first_excel_row}:{col_letter}{last_excel_row})"
+
+
+def aplicar_formulas_matriz(ws, workbook, data_row_count: int) -> None:
+    """
+    Aplica las fórmulas de la matriz:
+    H = E+F+G, K = H+I+J, O = L+M+N, S = O+P+Q+R, T = K+S.
+    La fila de total queda en la fila Excel 197 cuando la matriz tiene 195 filas de datos.
+    """
+    formula_format = workbook.add_format({"border": 1, "num_format": "0", "valign": "top"})
+    total_label_format = workbook.add_format({
+        "bold": True,
+        "bg_color": "#D9EAF7",
+        "border": 1,
+        "align": "right",
+        "valign": "top",
+    })
+    total_format = workbook.add_format({
+        "bold": True,
+        "bg_color": "#D9EAF7",
+        "border": 1,
+        "num_format": "0",
+        "valign": "top",
+    })
+
+    # Filas de datos: Excel 2 a Excel 196 si hay 195 registros en la matriz base.
+    for row_idx in range(1, data_row_count + 1):
+        excel_row = row_idx + 1
+        ws.write_formula(row_idx, 7, f"=SUM(E{excel_row}:G{excel_row})", formula_format)
+        ws.write_formula(row_idx, 10, f"=SUM(H{excel_row}:J{excel_row})", formula_format)
+        ws.write_formula(row_idx, 14, f"=SUM(L{excel_row}:N{excel_row})", formula_format)
+        ws.write_formula(row_idx, 18, f"=SUM(O{excel_row}:R{excel_row})", formula_format)
+        ws.write_formula(row_idx, 19, f"=K{excel_row}+S{excel_row}", formula_format)
+
+    total_row_idx = data_row_count + 1
+    last_excel_row = data_row_count + 1
+    ws.write(total_row_idx, 3, "TOTAL", total_label_format)
+    for col_idx, col_letter in enumerate("EFGHIJKLMNOPQRST", start=4):
+        ws.write_formula(total_row_idx, col_idx, formula_total_columna(col_letter, last_excel_row=last_excel_row), total_format)
+
+
+def limpiar_columnas_matriz(matriz: pd.DataFrame) -> pd.DataFrame:
+    matriz = matriz.copy()
+    for col in MATRIX_VALUE_COLUMNS:
+        if col in matriz.columns:
+            matriz[col] = pd.NA
+    return matriz
+
+
+def volcar_registro_en_matriz(matriz: pd.DataFrame, item: dict, columna_excel: str) -> None:
+    if not columna_excel or columna_excel not in matriz.columns or columna_excel in DERIVED_MATRIX_COLUMNS:
+        return
+
+    mask = (
+        (matriz["Nivel Estudio I"] == item["Nivel Estudio I"])
+        & (matriz["Nivel Estudio II"] == item["Nivel Estudio II"])
+        & (matriz["Rama"] == item["Rama"])
+        & (matriz["Titulación"] == item["Titulación"])
+    )
+    if not mask.any():
+        return
+
+    current = pd.to_numeric(matriz.loc[mask, columna_excel], errors="coerce").fillna(0)
+    matriz.loc[mask, columna_excel] = current + int(item["Nº alumnos"])
+
+
 def build_output_excel() -> bytes:
     catalogo = load_catalogo()
-    matriz = catalogo.copy()
+    matriz = limpiar_columnas_matriz(catalogo)
     registros = list(st.session_state.registros.values())
     registros_df = pd.DataFrame(registros)
 
     unidad = st.session_state.direccion_selected
     columna_excel = COLUMNA_EXCEL_POR_DIRECCION.get(unidad, "")
+    codigo = st.session_state.codigo_borrador or build_codigo_borrador(unidad)
+    estado = st.session_state.get("draft_estado", "borrador")
+    usuario = st.session_state.get("current_user_display", "") or st.session_state.get("current_user", "")
 
-    if columna_excel and columna_excel in matriz.columns and registros:
-        # Limpiamos solo la columna seleccionada y volcamos los registros del usuario.
-        matriz[columna_excel] = pd.NA
-        for item in registros:
-            mask = (
-                (matriz["Nivel Estudio I"] == item["Nivel Estudio I"])
-                & (matriz["Nivel Estudio II"] == item["Nivel Estudio II"])
-                & (matriz["Rama"] == item["Rama"])
-                & (matriz["Titulación"] == item["Titulación"])
-            )
-            matriz.loc[mask, columna_excel] = int(item["Nº alumnos"])
+    for item in registros:
+        volcar_registro_en_matriz(matriz, item, columna_excel)
 
     resumen = pd.DataFrame([{
         "Aplicativo": APP_VERSION,
@@ -500,7 +590,10 @@ def build_output_excel() -> bytes:
         "Unidad docente": unidad,
         "Código unidad": CODIGOS_DIRECCION.get(unidad, safe_code(unidad)),
         "Columna Excel": columna_excel,
-        "Código borrador": st.session_state.codigo_borrador or build_codigo_borrador(unidad),
+        "Código borrador": codigo,
+        "Estado": estado,
+        "Usuario": usuario,
+        "Observaciones": st.session_state.get("observaciones", ""),
         "Nº registros": len(registros),
         "Total alumnos": sum(int(x["Nº alumnos"]) for x in registros) if registros else 0,
     }])
@@ -510,6 +603,12 @@ def build_output_excel() -> bytes:
         resumen.to_excel(writer, sheet_name="Resumen", index=False)
         if registros_df.empty:
             registros_df = pd.DataFrame(columns=KEY_COLUMNS + ["Nº alumnos"])
+        else:
+            registros_df.insert(0, "Código borrador", codigo)
+            registros_df.insert(1, "Estado", estado)
+            registros_df.insert(2, "Área", st.session_state.area_selected)
+            registros_df.insert(3, "Unidad docente", unidad)
+            registros_df.insert(4, "Usuario", usuario)
         registros_df.to_excel(writer, sheet_name="Registros_DCD", index=False)
         matriz.to_excel(writer, sheet_name="Matriz_DCD", index=False)
 
@@ -545,8 +644,171 @@ def build_output_excel() -> bytes:
                             value = ""
                         ws.write(row_idx, col_idx, value, fmt)
 
+            if sheet_name == "Matriz_DCD":
+                aplicar_formulas_matriz(ws, workbook, len(matriz))
+
     output.seek(0)
     return output.getvalue()
+
+
+def get_latest_finalized_drafts() -> tuple[list[dict], list[dict]]:
+    client = get_supabase_client()
+    if client is None:
+        return [], []
+
+    resp = client.table("dcd_borradores").select("*").eq("estado", "finalizado").order("updated_at", desc=True).execute()
+    borradores = getattr(resp, "data", []) or []
+
+    latest_by_unit = {}
+    duplicates = []
+    for borrador in borradores:
+        unidad = borrador.get("unidad_docente", "")
+        if not unidad:
+            continue
+        if unidad not in latest_by_unit:
+            latest_by_unit[unidad] = borrador
+        else:
+            duplicates.append(borrador)
+
+    return list(latest_by_unit.values()), duplicates
+
+
+def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado.", None, ""
+
+    try:
+        borradores, duplicados = get_latest_finalized_drafts()
+        if not borradores:
+            return False, "No hay expedientes finalizados para consolidar.", None, ""
+
+        catalogo = load_catalogo()
+        matriz = limpiar_columnas_matriz(catalogo)
+        registros_consolidados = []
+        codigos_usados = []
+
+        for borrador in borradores:
+            codigo = borrador.get("codigo_borrador", "")
+            unidad = borrador.get("unidad_docente", "")
+            columna_excel = COLUMNA_EXCEL_POR_DIRECCION.get(unidad, "")
+            if not codigo:
+                continue
+
+            codigos_usados.append(codigo)
+            resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo).execute()
+            rows = getattr(resp, "data", []) or []
+
+            for row in rows:
+                item = {
+                    "Nivel Estudio I": row.get("nivel_i", ""),
+                    "Nivel Estudio II": row.get("nivel_ii", ""),
+                    "Rama": row.get("rama", ""),
+                    "Titulación": row.get("titulacion", ""),
+                    "Nº alumnos": int(row.get("numero_alumnos") or 0),
+                }
+                volcar_registro_en_matriz(matriz, item, columna_excel)
+                registros_consolidados.append({
+                    "Código borrador": codigo,
+                    "Fecha actualización": borrador.get("updated_at", ""),
+                    "Área": normalizar_area(borrador.get("area", "")),
+                    "Unidad docente": unidad,
+                    "Columna Excel": columna_excel,
+                    **item,
+                })
+
+        registros_df = pd.DataFrame(registros_consolidados)
+        if registros_df.empty:
+            registros_df = pd.DataFrame(columns=[
+                "Código borrador",
+                "Fecha actualización",
+                "Área",
+                "Unidad docente",
+                "Columna Excel",
+                *KEY_COLUMNS,
+                "Nº alumnos",
+            ])
+
+        resumen = pd.DataFrame([{
+            "Aplicativo": APP_VERSION,
+            "Fecha generación": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Tipo": "Consolidado finalizados",
+            "Expedientes usados": len(codigos_usados),
+            "Registros consolidados": len(registros_consolidados),
+            "Duplicados finalizados ignorados": len(duplicados),
+            "Criterio": "Último expediente finalizado por unidad docente según updated_at",
+            "Usuario generación": st.session_state.get("current_user_display", "") or st.session_state.get("current_user", ""),
+        }])
+
+        borradores_df = pd.DataFrame([{
+            "Código borrador": b.get("codigo_borrador", ""),
+            "Estado": b.get("estado", ""),
+            "Área": normalizar_area(b.get("area", "")),
+            "Unidad docente": b.get("unidad_docente", ""),
+            "Código unidad": b.get("codigo_unidad", ""),
+            "Actualizado": b.get("updated_at", ""),
+            "Columna Excel": COLUMNA_EXCEL_POR_DIRECCION.get(b.get("unidad_docente", ""), ""),
+        } for b in borradores])
+
+        duplicados_df = pd.DataFrame([{
+            "Código borrador ignorado": b.get("codigo_borrador", ""),
+            "Área": normalizar_area(b.get("area", "")),
+            "Unidad docente": b.get("unidad_docente", ""),
+            "Actualizado": b.get("updated_at", ""),
+        } for b in duplicados])
+        if duplicados_df.empty:
+            duplicados_df = pd.DataFrame(columns=["Código borrador ignorado", "Área", "Unidad docente", "Actualizado"])
+
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            sheets = {
+                "Resumen": resumen,
+                "Borradores_usados": borradores_df,
+                "Registros_DCD": registros_df,
+                "Duplicados_ignorados": duplicados_df,
+                "Matriz_DCD": matriz,
+            }
+
+            workbook = writer.book
+            header_format = workbook.add_format({
+                "bold": True,
+                "bg_color": "#1F4E78",
+                "font_color": "#FFFFFF",
+                "border": 1,
+                "align": "center",
+                "valign": "vcenter",
+            })
+            body_format = workbook.add_format({"border": 1, "valign": "top"})
+            int_format = workbook.add_format({"border": 1, "num_format": "0", "valign": "top"})
+
+            for sheet_name, df_sheet in sheets.items():
+                df_sheet.to_excel(writer, sheet_name=sheet_name, index=False)
+                ws = writer.sheets[sheet_name]
+                for col_num, value in enumerate(df_sheet.columns.values):
+                    ws.write(0, col_num, value, header_format)
+                    max_len = max([len(str(value))] + [len(str(v)) for v in df_sheet[value].head(200).fillna("").tolist()])
+                    ws.set_column(col_num, col_num, min(max(max_len + 2, 12), 45))
+                ws.freeze_panes(1, 0)
+                if not df_sheet.empty:
+                    rows, cols = df_sheet.shape
+                    ws.autofilter(0, 0, rows, max(cols - 1, 0))
+                    for row_idx in range(1, min(rows + 1, 500)):
+                        for col_idx, col_name in enumerate(df_sheet.columns):
+                            value = df_sheet.iloc[row_idx - 1, col_idx]
+                            fmt = int_format if isinstance(value, int) else body_format
+                            if pd.isna(value):
+                                value = ""
+                            ws.write(row_idx, col_idx, value, fmt)
+
+                if sheet_name == "Matriz_DCD":
+                    aplicar_formulas_matriz(ws, workbook, len(matriz))
+
+        output.seek(0)
+        filename = f"DCD_CONSOLIDADO_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        audit_event("generar_consolidado", f"Expedientes: {len(codigos_usados)}. Registros: {len(registros_consolidados)}")
+        return True, f"Consolidado generado con {len(codigos_usados)} expedientes finalizados.", output.getvalue(), filename
+    except Exception as exc:
+        return False, f"Error al generar consolidado: {exc}", None, ""
 
 
 # =========================================================
@@ -571,6 +833,12 @@ def app_sidebar() -> None:
         st.sidebar.success("Mailgun configurado")
     else:
         st.sidebar.info("Mailgun no configurado")
+
+    if st.session_state.get("current_user_role") == "admin":
+        st.sidebar.markdown("---")
+        if st.sidebar.button("Panel administrador"):
+            st.session_state.current_step = 6
+            st.rerun()
 
     st.sidebar.markdown("---")
     if st.sidebar.button("Salir del aplicativo 🚪"):
@@ -600,6 +868,8 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0:** MVP inicial con contraseña, instrucciones, selección de unidad docente, selectores dependientes y preparación para Supabase.")
     st.markdown("- **DCD 1.0.1:** Pantalla de recordatorio, correo automático opcional, usuarios configurables, auditoría y revisión de mapeo.")
     st.markdown("- **DCD 1.0.2:** Ajuste de áreas: Hospital, Atención Familiar y Comunitaria, y retirada de Otras Unidades Docentes.")
+    st.markdown("- **DCD 1.0.3:** Cierre estable: exportación más completa, estado finalizado y bloqueo suave de edición.")
+    st.markdown("- **DCD 1.0.4:** Totales en Matriz_DCD y panel administrador para Excel consolidado desde Supabase.")
 
 
 def page_instrucciones() -> None:
@@ -668,7 +938,14 @@ def page_seleccion_unidad() -> None:
     with col1:
         if st.button("Siguiente"):
             if st.session_state.area_selected and st.session_state.direccion_selected:
-                st.session_state.codigo_borrador = build_codigo_borrador(st.session_state.direccion_selected)
+                nuevo_codigo = build_codigo_borrador(st.session_state.direccion_selected)
+                if st.session_state.codigo_borrador and st.session_state.codigo_borrador != nuevo_codigo:
+                    st.session_state.registros = {}
+                    st.session_state.observaciones = ""
+                    st.session_state.draft_estado = "borrador"
+                    st.session_state.permitir_editar_finalizado = False
+                    reset_selectores_estudio()
+                st.session_state.codigo_borrador = nuevo_codigo
                 st.session_state.current_step = 3
                 st.rerun()
             else:
@@ -745,9 +1022,23 @@ def page_confirmacion() -> None:
 def page_entrada_datos() -> None:
     st.header("Paso 4: Introducción de datos")
     catalogo = load_catalogo()
+    expediente_finalizado = st.session_state.get("draft_estado") == "finalizado"
 
     st.write(f"Unidad docente seleccionada: **{st.session_state.direccion_selected}**")
     st.write(f"Código de borrador: `{st.session_state.codigo_borrador or build_codigo_borrador(st.session_state.direccion_selected)}`")
+    st.write(f"Estado actual: **{st.session_state.get('draft_estado', 'borrador').upper()}**")
+
+    if expediente_finalizado:
+        st.warning(
+            "Este expediente está marcado como FINALIZADO. Para evitar cambios accidentales, la edición queda bloqueada "
+            "hasta que active la casilla de edición."
+        )
+        st.checkbox(
+            "Permitir edición de este expediente finalizado",
+            key="permitir_editar_finalizado",
+        )
+
+    edicion_bloqueada = expediente_finalizado and not st.session_state.get("permitir_editar_finalizado", False)
 
     st.markdown("### Añadir o actualizar titulación")
 
@@ -758,6 +1049,7 @@ def page_entrada_datos() -> None:
         key="sel_nivel_i",
         on_change=reset_downstream,
         args=("nivel_i",),
+        disabled=edicion_bloqueada,
     )
 
     df2 = catalogo[catalogo["Nivel Estudio I"] == st.session_state.sel_nivel_i] if st.session_state.sel_nivel_i else catalogo.iloc[0:0]
@@ -770,7 +1062,7 @@ def page_entrada_datos() -> None:
         key="sel_nivel_ii",
         on_change=reset_downstream,
         args=("nivel_ii",),
-        disabled=not bool(st.session_state.sel_nivel_i),
+        disabled=edicion_bloqueada or not bool(st.session_state.sel_nivel_i),
     )
 
     df3 = df2[df2["Nivel Estudio II"] == st.session_state.sel_nivel_ii] if st.session_state.sel_nivel_ii else df2.iloc[0:0]
@@ -783,7 +1075,7 @@ def page_entrada_datos() -> None:
         key="sel_rama",
         on_change=reset_downstream,
         args=("rama",),
-        disabled=not bool(st.session_state.sel_nivel_ii),
+        disabled=edicion_bloqueada or not bool(st.session_state.sel_nivel_ii),
     )
 
     df4 = df3[df3["Rama"] == st.session_state.sel_rama] if st.session_state.sel_rama else df3.iloc[0:0]
@@ -794,7 +1086,7 @@ def page_entrada_datos() -> None:
         "Titulación",
         options=[""] + titulacion_options,
         key="sel_titulacion",
-        disabled=not bool(st.session_state.sel_rama),
+        disabled=edicion_bloqueada or not bool(st.session_state.sel_rama),
     )
 
     st.number_input(
@@ -802,12 +1094,12 @@ def page_entrada_datos() -> None:
         min_value=0,
         step=1,
         key="numero_alumnos",
-        disabled=not bool(st.session_state.sel_titulacion),
+        disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion),
     )
 
     col_add, col_clear = st.columns(2)
     with col_add:
-        if st.button("Añadir / actualizar registro"):
+        if st.button("Añadir / actualizar registro", disabled=edicion_bloqueada):
             if not all([
                 st.session_state.sel_nivel_i,
                 st.session_state.sel_nivel_ii,
@@ -832,7 +1124,7 @@ def page_entrada_datos() -> None:
                 audit_event("registro_actualizado", f"{st.session_state.sel_titulacion} | {int(st.session_state.numero_alumnos)} alumnos")
                 st.success("Registro añadido/actualizado correctamente.")
     with col_clear:
-        if st.button("Limpiar selectores"):
+        if st.button("Limpiar selectores", disabled=edicion_bloqueada):
             reset_selectores_estudio()
             st.rerun()
 
@@ -847,8 +1139,8 @@ def page_entrada_datos() -> None:
             f"{i + 1}. {r['Nivel Estudio II']} | {r['Rama']} | {r['Titulación']} | {r['Nº alumnos']} alumnos"
             for i, r in enumerate(registros)
         ]
-        delete_label = st.selectbox("Seleccionar registro para eliminar", options=[""] + registro_labels)
-        if st.button("Eliminar registro seleccionado"):
+        delete_label = st.selectbox("Seleccionar registro para eliminar", options=[""] + registro_labels, disabled=edicion_bloqueada)
+        if st.button("Eliminar registro seleccionado", disabled=edicion_bloqueada):
             if delete_label:
                 idx = int(delete_label.split(".", 1)[0]) - 1
                 item = registros[idx]
@@ -863,16 +1155,21 @@ def page_entrada_datos() -> None:
         st.info("Todavía no se ha introducido ningún registro.")
 
     st.markdown("---")
-    st.text_area("Observaciones internas del borrador", key="observaciones")
+    st.text_area("Observaciones internas del borrador", key="observaciones", disabled=edicion_bloqueada)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         if st.button("Guardar borrador"):
-            ok, msg = save_draft_to_supabase(estado="borrador")
-            if ok:
-                st.success(msg)
+            if expediente_finalizado and not st.session_state.get("permitir_editar_finalizado", False):
+                st.warning("El expediente está finalizado. Active la edición si necesita reabrirlo como borrador.")
             else:
-                st.warning(msg)
+                if expediente_finalizado:
+                    st.info("El expediente pasará de finalizado a borrador para poder corregirse.")
+                ok, msg = save_draft_to_supabase(estado="borrador")
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
     with col2:
         if st.button("Finalizar"):
             if not registros:
@@ -885,7 +1182,7 @@ def page_entrada_datos() -> None:
             st.session_state.current_step = 3
             st.rerun()
     with col4:
-        if st.button("Reiniciar datos"):
+        if st.button("Reiniciar datos", disabled=edicion_bloqueada):
             audit_event("reiniciar_datos", "Se eliminaron todos los registros de la sesión")
             st.session_state.registros = {}
             reset_selectores_estudio()
@@ -910,7 +1207,11 @@ def page_resumen_descarga() -> None:
 
     st.subheader("Resumen de datos introducidos")
     st.dataframe(df, use_container_width=True, hide_index=True)
-    st.metric("Total alumnos introducidos", total_alumnos)
+    col_estado, col_total = st.columns(2)
+    with col_estado:
+        st.metric("Estado actual", st.session_state.get("draft_estado", "borrador").upper())
+    with col_total:
+        st.metric("Total alumnos introducidos", total_alumnos)
 
     st.markdown("---")
     st.subheader("Recordatorio antes de finalizar")
@@ -952,7 +1253,7 @@ def page_resumen_descarga() -> None:
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        st.caption("La descarga no marca por sí sola el expediente como finalizado.")
+        st.caption("La descarga no marca por sí sola el expediente como finalizado. Si quiere cerrar el expediente, use el botón de finalización.")
 
     with col3:
         if st.button("REVISAR / VOLVER"):
@@ -961,7 +1262,7 @@ def page_resumen_descarga() -> None:
 
     col4, col5 = st.columns(2)
     with col4:
-        if st.button("Guardar como finalizado en Supabase"):
+        if st.button("Finalizar expediente en Supabase"):
             if not all([check1, check2, check3]):
                 st.warning("Debe marcar las tres casillas de revisión antes de finalizar.")
             else:
@@ -989,6 +1290,80 @@ def page_resumen_descarga() -> None:
 
     st.markdown("---")
     st.caption("Si Mailgun no está configurado, el botón de correo mostrará un aviso y podrá seguir usando la descarga manual.")
+
+
+def page_admin_consolidado() -> None:
+    st.header("Panel administrador: consolidado DCD")
+
+    if st.session_state.get("current_user_role") != "admin":
+        st.error("Esta pantalla solo está disponible para usuarios administradores.")
+        if st.button("Volver"):
+            st.session_state.current_step = 2
+            st.rerun()
+        return
+
+    st.markdown(
+        """
+        Esta pantalla genera un Excel consolidado a partir de los expedientes guardados como **finalizado** en Supabase.
+
+        Criterio aplicado:
+        - Se toma el último expediente finalizado por cada unidad docente.
+        - Si dos unidades vuelcan en la misma columna, sus registros se suman en la matriz.
+        - Las columnas de totales se calculan automáticamente:
+          H = E+F+G, K = H+I+J, O = L+M+N, S = O+P+Q+R y T = K+S.
+        """
+    )
+
+    if not supabase_available():
+        st.warning("Supabase no está configurado. No se puede generar el consolidado.")
+        return
+
+    borradores, duplicados = get_latest_finalized_drafts()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Expedientes finalizados usados", len(borradores))
+    with col2:
+        st.metric("Duplicados finalizados ignorados", len(duplicados))
+
+    if borradores:
+        preview = pd.DataFrame([{
+            "Código borrador": b.get("codigo_borrador", ""),
+            "Área": normalizar_area(b.get("area", "")),
+            "Unidad docente": b.get("unidad_docente", ""),
+            "Actualizado": b.get("updated_at", ""),
+            "Columna Excel": COLUMNA_EXCEL_POR_DIRECCION.get(b.get("unidad_docente", ""), ""),
+        } for b in borradores])
+        st.subheader("Expedientes que entrarán en el consolidado")
+        st.dataframe(preview, use_container_width=True, hide_index=True)
+    else:
+        st.info("Todavía no hay expedientes finalizados para consolidar.")
+
+    if duplicados:
+        with st.expander("Ver expedientes finalizados duplicados que se ignorarán"):
+            st.dataframe(pd.DataFrame([{
+                "Código borrador ignorado": b.get("codigo_borrador", ""),
+                "Área": normalizar_area(b.get("area", "")),
+                "Unidad docente": b.get("unidad_docente", ""),
+                "Actualizado": b.get("updated_at", ""),
+            } for b in duplicados]), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    if st.button("Generar Excel consolidado"):
+        ok, msg, excel_bytes, filename = build_consolidated_excel_from_supabase()
+        if ok and excel_bytes:
+            st.success(msg)
+            st.download_button(
+                label="Descargar Excel consolidado",
+                data=excel_bytes,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.warning(msg)
+
+    if st.button("Volver al aplicativo"):
+        st.session_state.current_step = 2
+        st.rerun()
 
 
 # =========================================================
@@ -1021,6 +1396,8 @@ elif st.session_state.current_step == 4:
     page_entrada_datos()
 elif st.session_state.current_step == 5:
     page_resumen_descarga()
+elif st.session_state.current_step == 6:
+    page_admin_consolidado()
 else:
     st.session_state.current_step = 1
     st.rerun()
