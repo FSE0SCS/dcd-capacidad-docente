@@ -4,3 +4,5 @@ openpyxl
 xlsxwriter
 supabase
 requests
+
+reportlab

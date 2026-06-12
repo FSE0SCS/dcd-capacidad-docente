@@ -15,11 +15,27 @@ try:
 except Exception:
     create_client = None
 
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A3, landscape
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+except Exception:
+    colors = None
+    landscape = None
+    A3 = None
+    getSampleStyleSheet = None
+    SimpleDocTemplate = None
+    Table = None
+    TableStyle = None
+    Paragraph = None
+    Spacer = None
+
 
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.6"
+APP_VERSION = "DCD 1.0.7"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -125,6 +141,7 @@ MATRIX_VALUE_COLUMNS = [
     "Total",
 ]
 DERIVED_MATRIX_COLUMNS = {"Gran Canaria", "Las Palmas", "Tenerife", "S/C Tenerife", "Total"}
+PUBLICATION_BUCKET = "dcd-publicaciones"
 
 
 # =========================================================
@@ -563,6 +580,20 @@ def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
 
         audit_event("guardar_borrador" if estado == "borrador" else "guardar_finalizado", f"Estado: {estado}. Versión: {version_num}. Registros: {len(rows)}", codigo_borrador)
         if estado == "finalizado":
+            send_admin_notification(
+                subject=f"DCD - Centro docente finalizado: {unidad}",
+                text=(
+                    f"Un centro docente ha finalizado una nueva versión de su expediente DCD.\n\n"
+                    f"Centro docente: {unidad}\n"
+                    f"Código: {codigo_borrador}\n"
+                    f"Versión: {version_num}\n"
+                    f"Usuario: {st.session_state.get('current_user_display', '') or st.session_state.get('current_user', '')}\n"
+                    f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+                ),
+            )
+            auto_msg = maybe_auto_publish_if_complete()
+            if auto_msg:
+                return True, f"Expediente finalizado correctamente como nueva versión: {codigo_borrador}. {auto_msg}"
             return True, f"Expediente finalizado correctamente como nueva versión: {codigo_borrador}"
         return True, f"Borrador guardado correctamente como nueva versión: {codigo_borrador}"
     except Exception as exc:
@@ -1005,6 +1036,339 @@ def send_missing_centros_email(missing: list[str], status_df: pd.DataFrame) -> t
         return False, f"Error al enviar aviso: {exc}"
 
 
+
+def calcular_totales_matriz_df(matriz: pd.DataFrame) -> pd.DataFrame:
+    """Devuelve una copia de Matriz_DCD con columnas derivadas calculadas y fila TOTAL."""
+    out = matriz.copy()
+    for col in MATRIX_VALUE_COLUMNS:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0).astype(int)
+
+    if all(c in out.columns for c in ["CHUIMI", "HUGC DN", "GAP GC", "Gran Canaria"]):
+        out["Gran Canaria"] = out["CHUIMI"] + out["HUGC DN"] + out["GAP GC"]
+    if all(c in out.columns for c in ["Gran Canaria", "GSS FV", "GSS LZ", "Las Palmas"]):
+        out["Las Palmas"] = out["Gran Canaria"] + out["GSS FV"] + out["GSS LZ"]
+    if all(c in out.columns for c in ["CHUC", "HUNSC", "GAP TF", "Tenerife"]):
+        out["Tenerife"] = out["CHUC"] + out["HUNSC"] + out["GAP TF"]
+    if all(c in out.columns for c in ["Tenerife", "GSS LP", "GSS LG", "GSS EH", "S/C Tenerife"]):
+        out["S/C Tenerife"] = out["Tenerife"] + out["GSS LP"] + out["GSS LG"] + out["GSS EH"]
+    if all(c in out.columns for c in ["Las Palmas", "S/C Tenerife", "Total"]):
+        out["Total"] = out["Las Palmas"] + out["S/C Tenerife"]
+
+    total_row = {col: "" for col in out.columns}
+    if "Titulación" in out.columns:
+        total_row["Titulación"] = "TOTAL"
+    elif len(out.columns) >= 4:
+        total_row[out.columns[3]] = "TOTAL"
+    for col in MATRIX_VALUE_COLUMNS:
+        if col in out.columns:
+            total_row[col] = int(pd.to_numeric(out[col], errors="coerce").fillna(0).sum())
+    out = pd.concat([out, pd.DataFrame([total_row])], ignore_index=True)
+    return out
+
+
+def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[str]) -> bytes:
+    if SimpleDocTemplate is None or Table is None:
+        raise RuntimeError("La librería reportlab no está instalada. Añada reportlab a requirements.txt y reinicie la app.")
+
+    matriz_pdf = calcular_totales_matriz_df(matriz)
+    output = io.BytesIO()
+    doc = SimpleDocTemplate(
+        output,
+        pagesize=landscape(A3),
+        leftMargin=18,
+        rightMargin=18,
+        topMargin=18,
+        bottomMargin=18,
+    )
+    styles = getSampleStyleSheet()
+    story = [Paragraph(titulo, styles["Title"])]
+    for linea in resumen_lineas:
+        story.append(Paragraph(str(linea), styles["Normal"]))
+    story.append(Spacer(1, 8))
+
+    df = matriz_pdf.copy().fillna("")
+    # Reducimos textos largos para que la matriz sea imprimible en PDF.
+    for col in ["Nivel Estudio I", "Nivel Estudio II", "Rama", "Titulación"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.slice(0, 70)
+
+    data = [list(df.columns)] + df.astype(str).values.tolist()
+    page_width = landscape(A3)[0] - 36
+    # 4 columnas descriptivas + 16 columnas numéricas. Ajuste compacto.
+    desc_widths = [52, 58, 80, 170]
+    remaining = max(page_width - sum(desc_widths), 200)
+    numeric_count = max(len(df.columns) - 4, 1)
+    col_widths = desc_widths + [remaining / numeric_count] * numeric_count
+    col_widths = col_widths[:len(df.columns)]
+
+    table = Table(data, colWidths=col_widths, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 5.5),
+        ("FONTSIZE", (0, 1), (-1, -1), 4.5),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (4, 1), (-1, -1), "RIGHT"),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#E2F0D9")),
+        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+    ]))
+    story.append(table)
+    doc.build(story)
+    output.seek(0)
+    return output.getvalue()
+
+
+def build_publication_package() -> tuple[bool, str, dict | None]:
+    """Construye los objetos necesarios para una publicación, sin guardarlos todavía."""
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado.", None
+
+    borradores, duplicados = get_latest_finalized_drafts()
+    if not borradores:
+        return False, "No hay expedientes finalizados para publicar.", None
+
+    status_df, missing_centros = get_admin_centros_status()
+    catalogo = load_catalogo()
+    matriz = limpiar_columnas_matriz(catalogo)
+    registros_consolidados = []
+    codigos_usados = []
+
+    for borrador in borradores:
+        codigo = borrador.get("codigo_borrador", "")
+        unidad = borrador.get("unidad_docente", "")
+        columna_excel = COLUMNA_EXCEL_POR_DIRECCION.get(unidad, "")
+        if not codigo:
+            continue
+        codigos_usados.append(codigo)
+        resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo).execute()
+        rows = getattr(resp, "data", []) or []
+        for row in rows:
+            item = {
+                "Nivel Estudio I": row.get("nivel_i", ""),
+                "Nivel Estudio II": row.get("nivel_ii", ""),
+                "Rama": row.get("rama", ""),
+                "Titulación": row.get("titulacion", ""),
+                "Nº alumnos": int(row.get("numero_alumnos") or 0),
+            }
+            volcar_registro_en_matriz(matriz, item, columna_excel)
+            registros_consolidados.append({
+                "Código borrador": codigo,
+                "Fecha guardado": borrador.get("saved_at") or borrador.get("updated_at", ""),
+                "Área": normalizar_area(borrador.get("area", "")),
+                "Centro docente": unidad,
+                "Columna Excel": columna_excel,
+                **item,
+            })
+
+    ok_xlsx, msg_xlsx, excel_bytes, excel_filename = build_consolidated_excel_from_supabase()
+    if not ok_xlsx or not excel_bytes:
+        return False, msg_xlsx, None
+
+    fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    pdf_bytes = generate_matriz_pdf(
+        matriz,
+        titulo="DATOS CAPACIDAD DOCENTE (DCD 1.0) - Matriz DCD",
+        resumen_lineas=[
+            f"Fecha de generación: {fecha}",
+            f"Expedientes finalizados incorporados: {len(codigos_usados)}",
+            f"Centros docentes pendientes: {len(missing_centros)}",
+            "Criterio: última versión finalizada por centro docente.",
+        ],
+    )
+
+    return True, "Paquete de publicación generado.", {
+        "excel_bytes": excel_bytes,
+        "excel_filename": excel_filename,
+        "pdf_bytes": pdf_bytes,
+        "pdf_filename": f"Matriz_DCD_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+        "status_df": status_df,
+        "missing_centros": missing_centros,
+        "borradores": borradores,
+        "duplicados": duplicados,
+        "registros_consolidados": registros_consolidados,
+        "matriz": matriz,
+    }
+
+
+def get_next_publication_version() -> int:
+    client = get_supabase_client()
+    if client is None:
+        return 1
+    try:
+        resp = client.table("dcd_publicaciones").select("version_publicacion").order("version_publicacion", desc=True).limit(1).execute()
+        rows = getattr(resp, "data", []) or []
+        if rows and rows[0].get("version_publicacion") is not None:
+            return int(rows[0].get("version_publicacion") or 0) + 1
+    except Exception:
+        pass
+    return 1
+
+
+def ensure_publication_bucket(client) -> None:
+    try:
+        client.storage.create_bucket(PUBLICATION_BUCKET, options={"public": False})
+    except Exception:
+        # Si ya existe, Supabase devuelve error. No debe bloquear.
+        pass
+
+
+def upload_publication_file(client, path: str, data: bytes, content_type: str) -> tuple[bool, str]:
+    try:
+        ensure_publication_bucket(client)
+        try:
+            client.storage.from_(PUBLICATION_BUCKET).upload(path, data, file_options={"content-type": content_type, "upsert": "true"})
+        except TypeError:
+            client.storage.from_(PUBLICATION_BUCKET).upload(path, data, {"content-type": content_type, "upsert": "true"})
+        return True, path
+    except Exception as exc:
+        return False, f"Error al subir archivo a Supabase Storage: {exc}"
+
+
+def download_publication_file(path: str) -> tuple[bool, bytes | None, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, None, "Supabase no está configurado."
+    try:
+        data = client.storage.from_(PUBLICATION_BUCKET).download(path)
+        return True, data, "Archivo descargado."
+    except Exception as exc:
+        return False, None, f"Error al descargar archivo: {exc}"
+
+
+def send_admin_notification(subject: str, text: str) -> tuple[bool, str]:
+    api_key = get_secret("MAILGUN_API_KEY", "")
+    domain = get_secret("MAILGUN_DOMAIN", "")
+    sender = get_secret("MAILGUN_SENDER_EMAIL", "")
+    recipient = get_secret("MAILGUN_RECIPIENT_EMAIL", "")
+
+    if not all([api_key, domain, sender, recipient]):
+        return False, "Mailgun no está configurado; no se ha enviado correo de notificación."
+    try:
+        response = requests.post(
+            f"https://api.mailgun.net/v3/{domain}/messages",
+            auth=("api", api_key),
+            data={"from": sender, "to": recipient, "subject": subject, "text": text},
+            timeout=30,
+        )
+        if response.status_code == 200:
+            return True, f"Notificación enviada a {recipient}."
+        return False, f"Error Mailgun {response.status_code}: {response.text}"
+    except Exception as exc:
+        return False, f"Error al enviar notificación: {exc}"
+
+
+def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) -> tuple[bool, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado."
+
+    ok, msg, package = build_publication_package()
+    if not ok or not package:
+        return False, msg
+
+    missing = package["missing_centros"]
+    if missing and not allow_missing:
+        return False, "Hay centros docentes pendientes. Marque la opción de publicar con pendientes o espere a que finalicen."
+
+    version = get_next_publication_version()
+    codigo_publicacion = f"DCD-PUB-2026-V{version:03d}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    base_path = f"publicaciones/{codigo_publicacion}"
+    excel_path = f"{base_path}/{codigo_publicacion}.xlsx"
+    pdf_path = f"{base_path}/{codigo_publicacion}_Matriz_DCD.pdf"
+
+    ok_up_xlsx, msg_xlsx = upload_publication_file(
+        client,
+        excel_path,
+        package["excel_bytes"],
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    if not ok_up_xlsx:
+        return False, msg_xlsx
+    ok_up_pdf, msg_pdf = upload_publication_file(client, pdf_path, package["pdf_bytes"], "application/pdf")
+    if not ok_up_pdf:
+        return False, msg_pdf
+
+    try:
+        client.table("dcd_publicaciones").update({"publicacion_vigente": False}).eq("publicacion_vigente", True).execute()
+        centros_incluidos = [b.get("unidad_docente", "") for b in package["borradores"]]
+        client.table("dcd_publicaciones").insert({
+            "codigo_publicacion": codigo_publicacion,
+            "version_publicacion": version,
+            "fecha_publicacion": datetime.now().isoformat(),
+            "publicacion_vigente": True,
+            "tipo_publicacion": tipo_publicacion,
+            "motivo_publicacion": motivo,
+            "generada_por": st.session_state.get("current_user", "sistema"),
+            "generada_automaticamente": tipo_publicacion == "automatica",
+            "ruta_excel": excel_path,
+            "ruta_pdf": pdf_path,
+            "centros_incluidos": centros_incluidos,
+            "centros_pendientes": missing,
+            "centros_con_borrador_no_finalizado": package["status_df"].to_dict(orient="records"),
+            "observaciones": "Publicación vigente generada desde DCD 1.0.7.",
+        }).execute()
+        audit_event("publicacion_generada", f"{codigo_publicacion}. Pendientes: {len(missing)}")
+    except Exception as exc:
+        return False, f"Los archivos se subieron, pero falló el registro de publicación: {exc}"
+
+    subject = f"DCD - Nueva publicación vigente {codigo_publicacion}"
+    text = (
+        f"Se ha generado una nueva publicación vigente DCD.\n\n"
+        f"Código: {codigo_publicacion}\n"
+        f"Tipo: {tipo_publicacion}\n"
+        f"Motivo: {motivo}\n"
+        f"Centros incluidos: {len(package['borradores'])}\n"
+        f"Centros pendientes: {len(missing)}\n"
+        f"Publicación anterior: archivada como no vigente.\n"
+        f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+    )
+    send_admin_notification(subject, text)
+    return True, f"Publicación vigente creada correctamente: {codigo_publicacion}"
+
+
+def get_publicaciones() -> list[dict]:
+    client = get_supabase_client()
+    if client is None:
+        return []
+    try:
+        resp = client.table("dcd_publicaciones").select("*").order("fecha_publicacion", desc=True).limit(100).execute()
+        return getattr(resp, "data", []) or []
+    except Exception:
+        return []
+
+def maybe_auto_publish_if_complete() -> str:
+    """Publica automáticamente cuando todos los centros esperados tienen finalizado.
+
+    Nunca debe bloquear la finalización del centro: si falla, se registra/avisa y se devuelve un mensaje informativo.
+    """
+    try:
+        _status_df, missing = get_admin_centros_status()
+        if missing:
+            return f"Quedan {len(missing)} centros pendientes; no se genera publicación automática todavía."
+        ok, msg = create_publication(
+            tipo_publicacion="automatica",
+            motivo="Publicación automática generada al estar todos los centros docentes finalizados.",
+            allow_missing=False,
+        )
+        if ok:
+            return f"Se ha generado publicación automática: {msg}"
+        send_admin_notification(
+            "DCD - Error al generar publicación automática",
+            f"Todos los centros parecen finalizados, pero no se pudo generar la publicación automática.\n\nDetalle: {msg}",
+        )
+        return f"Todos los centros están finalizados, pero no se pudo generar la publicación automática: {msg}"
+    except Exception as exc:
+        send_admin_notification(
+            "DCD - Error inesperado en publicación automática",
+            f"Se produjo un error inesperado al intentar publicar automáticamente.\n\nDetalle: {exc}",
+        )
+        return f"No se pudo comprobar/generar la publicación automática: {exc}"
+
+
 def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, str]:
     client = get_supabase_client()
     if client is None:
@@ -1210,6 +1574,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.5:** Usuarios por centro docente, contraseñas hasheadas, reset por admin y borradores filtrados.")
     st.markdown("- **DCD 1.0.5.1:** Corrección del selector de centro docente al crear usuarios.")
     st.markdown("- **DCD 1.0.6:** Guardado versionado, control de centros pendientes y cambio visible a Centros Docentes.")
+    st.markdown("- **DCD 1.0.7:** Publicaciones oficiales: PDF Matriz_DCD, histórico/vigente, Supabase Storage y notificación al administrador.")
 
 
 def page_change_password() -> None:
@@ -1782,6 +2147,113 @@ def render_admin_consolidado() -> None:
             st.warning(msg)
 
 
+
+def render_admin_publicaciones() -> None:
+    st.subheader("Publicaciones oficiales")
+    st.markdown(
+        """
+        Esta pantalla gestiona la publicación oficial de la Matriz DCD.
+
+        - El administrador ve el histórico completo.
+        - Las entidades externas, en una futura fase, solo verán la publicación marcada como **vigente**.
+        - Una nueva publicación no borra la anterior: la archiva como no vigente.
+        """
+    )
+
+    if not supabase_available():
+        st.warning("Supabase no está configurado. No se pueden gestionar publicaciones.")
+        return
+
+    status_df, missing_centros = get_admin_centros_status()
+    publicaciones = get_publicaciones()
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Centros pendientes", len(missing_centros))
+    with col2:
+        st.metric("Publicaciones históricas", len(publicaciones))
+    with col3:
+        vigente = next((p for p in publicaciones if p.get("publicacion_vigente")), None)
+        st.metric("Publicación vigente", vigente.get("codigo_publicacion", "No") if vigente else "No")
+
+    st.markdown("### Estado actual de centros")
+    st.dataframe(status_df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("### Crear publicación")
+    if missing_centros:
+        st.warning("Hay centros docentes pendientes. Puede publicar con los datos disponibles, pero quedará registrado.")
+        with st.expander("Ver centros pendientes"):
+            for centro in missing_centros:
+                st.write(f"- {centro}")
+    else:
+        st.success("Todos los centros docentes esperados tienen una versión finalizada.")
+
+    motivo = st.text_area(
+        "Motivo de publicación",
+        value="Publicación generada desde Panel Administrador.",
+        key="motivo_publicacion_admin",
+    )
+    permitir_pendientes = st.checkbox(
+        "Permitir publicación con centros pendientes",
+        value=False,
+        help="Use esta opción solo si se ha alcanzado el vencimiento o si administrativamente procede publicar con los datos disponibles.",
+    )
+    confirm_publication = st.checkbox(
+        "Confirmo que deseo generar una nueva publicación vigente. La anterior quedará archivada solo para administrador.",
+        value=False,
+    )
+
+    if st.button("Generar publicación vigente"):
+        if not confirm_publication:
+            st.warning("Debe marcar la confirmación antes de publicar.")
+        else:
+            tipo = "manual_con_pendientes" if missing_centros else "manual_completa"
+            ok, msg = create_publication(tipo_publicacion=tipo, motivo=motivo, allow_missing=permitir_pendientes)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+    st.markdown("---")
+    st.markdown("### Histórico de publicaciones")
+    if not publicaciones:
+        st.info("Todavía no hay publicaciones generadas.")
+        return
+
+    publicaciones_df = pd.DataFrame([{
+        "Código": p.get("codigo_publicacion", ""),
+        "Versión": p.get("version_publicacion", ""),
+        "Fecha": p.get("fecha_publicacion", ""),
+        "Vigente": "Sí" if p.get("publicacion_vigente") else "No",
+        "Tipo": p.get("tipo_publicacion", ""),
+        "Motivo": p.get("motivo_publicacion", ""),
+        "Generada por": p.get("generada_por", ""),
+        "Pendientes": len(p.get("centros_pendientes") or []),
+    } for p in publicaciones])
+    st.dataframe(publicaciones_df, use_container_width=True, hide_index=True)
+
+    codigos = [p.get("codigo_publicacion", "") for p in publicaciones if p.get("codigo_publicacion")]
+    selected = st.selectbox("Seleccionar publicación para descargar", options=[""] + codigos)
+    pub = next((p for p in publicaciones if p.get("codigo_publicacion") == selected), None)
+    if pub:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Preparar descarga PDF"):
+                ok, data, msg = download_publication_file(pub.get("ruta_pdf", ""))
+                if ok and data:
+                    st.download_button("Descargar PDF Matriz_DCD", data=data, file_name=f"{selected}_Matriz_DCD.pdf", mime="application/pdf")
+                else:
+                    st.error(msg)
+        with c2:
+            if st.button("Preparar descarga Excel"):
+                ok, data, msg = download_publication_file(pub.get("ruta_excel", ""))
+                if ok and data:
+                    st.download_button("Descargar Excel consolidado", data=data, file_name=f"{selected}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    st.error(msg)
+
 def render_admin_usuarios() -> None:
     st.subheader("Usuarios y permisos")
     st.info("Las contraseñas se guardan hasheadas. El administrador puede resetearlas, pero no verlas.")
@@ -1877,9 +2349,11 @@ def page_admin_consolidado() -> None:
             st.rerun()
         return
 
-    tab_consolidado, tab_usuarios = st.tabs(["Consolidado", "Usuarios"])
+    tab_consolidado, tab_publicaciones, tab_usuarios = st.tabs(["Consolidado", "Publicaciones", "Usuarios"])
     with tab_consolidado:
         render_admin_consolidado()
+    with tab_publicaciones:
+        render_admin_publicaciones()
     with tab_usuarios:
         render_admin_usuarios()
 

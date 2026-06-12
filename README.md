@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.6)
+# DATOS CAPACIDAD DOCENTE (DCD 1.0.7)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -137,7 +137,7 @@ Comandos habituales:
 
 ```bash
 git add .
-git commit -m "Actualizar DCD 1.0.6"
+git commit -m "Actualizar DCD 1.0.7"
 git push
 ```
 
@@ -165,3 +165,25 @@ Después de cambiar secretos, haz siempre reboot/restart de la app para que Stre
 8. Descarga de Excel.
 9. Guardado como finalizado.
 10. Envío automático opcional.
+
+## 10. Publicaciones oficiales DCD 1.0.7
+
+Esta versión añade un módulo de publicaciones oficiales:
+
+- Genera Excel consolidado desde Supabase.
+- Genera PDF de la hoja `Matriz_DCD`.
+- Guarda ambos archivos en Supabase Storage, bucket privado `dcd-publicaciones`.
+- Registra cada publicación en `dcd_publicaciones`.
+- Marca una única publicación como `publicacion_vigente = true`.
+- Conserva las publicaciones anteriores como histórico para el administrador.
+- Envía correo al administrador si Mailgun está configurado.
+- Si todos los centros están finalizados, la app puede generar una publicación automática al finalizar el último centro.
+- El administrador puede generar manualmente una publicación vigente, incluso con centros pendientes, dejando constancia en el registro.
+
+Para esta versión es obligatorio ejecutar de nuevo:
+
+```text
+supabase/schema.sql
+```
+
+porque añade la tabla `dcd_publicaciones` y el bucket `dcd-publicaciones` en Supabase Storage.
