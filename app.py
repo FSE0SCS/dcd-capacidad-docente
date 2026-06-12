@@ -35,7 +35,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.7"
+APP_VERSION = "DCD 1.0.8"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -141,6 +141,37 @@ MATRIX_VALUE_COLUMNS = [
     "Total",
 ]
 DERIVED_MATRIX_COLUMNS = {"Gran Canaria", "Las Palmas", "Tenerife", "S/C Tenerife", "Total"}
+
+# Columnas reales introducidas por centros. Las columnas agregadas se calculan.
+REAL_CENTER_COLUMNS = [
+    "CHUIMI",
+    "HUGC DN",
+    "GAP GC",
+    "GSS FV",
+    "GSS LZ",
+    "CHUC",
+    "HUNSC",
+    "GAP TF",
+    "GSS LP",
+    "GSS LG",
+    "GSS EH",
+]
+
+ISLA_COLUMNAS = {
+    "Gran Canaria": ["CHUIMI", "HUGC DN", "GAP GC"],
+    "Fuerteventura": ["GSS FV"],
+    "Lanzarote": ["GSS LZ"],
+    "Tenerife": ["GAP TF", "CHUC", "HUNSC"],
+    "La Palma": ["GSS LP"],
+    "La Gomera": ["GSS LG"],
+    "El Hierro": ["GSS EH"],
+}
+
+PROVINCIA_COLUMNAS = {
+    "Las Palmas": ["CHUIMI", "HUGC DN", "GAP GC", "GSS FV", "GSS LZ"],
+    "S/C Tenerife": ["GAP TF", "CHUC", "HUNSC", "GSS LP", "GSS LG", "GSS EH"],
+}
+
 PUBLICATION_BUCKET = "dcd-publicaciones"
 
 
@@ -1067,7 +1098,223 @@ def calcular_totales_matriz_df(matriz: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[str]) -> bytes:
+
+def matriz_sin_total(matriz: pd.DataFrame) -> pd.DataFrame:
+    """Devuelve la matriz calculada sin la fila TOTAL final."""
+    df = calcular_totales_matriz_df(matriz)
+    if "Titulación" in df.columns:
+        df = df[df["Titulación"].astype(str).str.upper().str.strip() != "TOTAL"].copy()
+    return df.reset_index(drop=True)
+
+
+def suma_columnas(df: pd.DataFrame, columnas: list[str]) -> pd.Series:
+    existentes = [c for c in columnas if c in df.columns]
+    if not existentes:
+        return pd.Series([0] * len(df), index=df.index)
+    return df[existentes].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1)
+
+
+def total_columna(df: pd.DataFrame, columna: str) -> int:
+    if columna not in df.columns:
+        return 0
+    return int(pd.to_numeric(df[columna], errors="coerce").fillna(0).sum())
+
+
+def build_analytics_tables(matriz: pd.DataFrame, status_df: pd.DataFrame | None = None) -> dict[str, pd.DataFrame]:
+    """Construye tablas analíticas a partir de la Matriz_DCD consolidada."""
+    df = matriz_sin_total(matriz)
+    for col in MATRIX_VALUE_COLUMNS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    total = total_columna(df, "Total")
+    las_palmas = suma_columnas(df, PROVINCIA_COLUMNAS["Las Palmas"]).sum()
+    tenerife_prov = suma_columnas(df, PROVINCIA_COLUMNAS["S/C Tenerife"]).sum()
+    centros_finalizados = 0
+    centros_pendientes = 0
+    if status_df is not None and not status_df.empty and "Estado" in status_df.columns:
+        centros_finalizados = int(status_df["Estado"].astype(str).str.startswith("Finalizado").sum())
+        centros_pendientes = int((~status_df["Estado"].astype(str).str.startswith("Finalizado")).sum())
+
+    resumen_global = pd.DataFrame([
+        {"Indicador": "Total plazas", "Valor": int(total)},
+        {"Indicador": "Total provincia Las Palmas", "Valor": int(las_palmas)},
+        {"Indicador": "Total provincia S/C Tenerife", "Valor": int(tenerife_prov)},
+        {"Indicador": "% Las Palmas sobre total", "Valor": round((las_palmas / total * 100), 2) if total else 0},
+        {"Indicador": "% S/C Tenerife sobre total", "Valor": round((tenerife_prov / total * 100), 2) if total else 0},
+        {"Indicador": "Centros finalizados", "Valor": centros_finalizados},
+        {"Indicador": "Centros pendientes/sin finalizar", "Valor": centros_pendientes},
+    ])
+
+    resumen_provincia = pd.DataFrame([
+        {"Provincia": provincia, "Total plazas": int(suma_columnas(df, columnas).sum()), "% sobre total": round((suma_columnas(df, columnas).sum() / total * 100), 2) if total else 0}
+        for provincia, columnas in PROVINCIA_COLUMNAS.items()
+    ])
+
+    resumen_isla = pd.DataFrame([
+        {"Isla": isla, "Total plazas": int(suma_columnas(df, columnas).sum()), "% sobre total": round((suma_columnas(df, columnas).sum() / total * 100), 2) if total else 0}
+        for isla, columnas in ISLA_COLUMNAS.items()
+    ]).sort_values("Total plazas", ascending=False).reset_index(drop=True)
+
+    resumen_centro = pd.DataFrame([
+        {"Centro/columna": col, "Total plazas": total_columna(df, col), "% sobre total": round((total_columna(df, col) / total * 100), 2) if total else 0}
+        for col in REAL_CENTER_COLUMNS if col in df.columns
+    ]).sort_values("Total plazas", ascending=False).reset_index(drop=True)
+
+    resumen_rama = (
+        df.groupby("Rama", dropna=False)["Total"].sum().reset_index(name="Total plazas")
+        if "Rama" in df.columns and "Total" in df.columns else pd.DataFrame(columns=["Rama", "Total plazas"])
+    )
+    if not resumen_rama.empty:
+        resumen_rama["% sobre total"] = resumen_rama["Total plazas"].apply(lambda x: round((x / total * 100), 2) if total else 0)
+        resumen_rama = resumen_rama.sort_values("Total plazas", ascending=False).reset_index(drop=True)
+
+    resumen_nivel = (
+        df.groupby(["Nivel Estudio I", "Nivel Estudio II"], dropna=False)["Total"].sum().reset_index(name="Total plazas")
+        if all(c in df.columns for c in ["Nivel Estudio I", "Nivel Estudio II", "Total"]) else pd.DataFrame(columns=["Nivel Estudio I", "Nivel Estudio II", "Total plazas"])
+    )
+    if not resumen_nivel.empty:
+        resumen_nivel["% sobre total"] = resumen_nivel["Total plazas"].apply(lambda x: round((x / total * 100), 2) if total else 0)
+        resumen_nivel = resumen_nivel.sort_values("Total plazas", ascending=False).reset_index(drop=True)
+
+    centro_rama_rows = []
+    for col in REAL_CENTER_COLUMNS:
+        if col not in df.columns:
+            continue
+        tmp = df.groupby("Rama", dropna=False)[col].sum().reset_index(name="Total plazas")
+        tmp.insert(0, "Centro/columna", col)
+        centro_rama_rows.append(tmp)
+    resumen_centro_rama = pd.concat(centro_rama_rows, ignore_index=True) if centro_rama_rows else pd.DataFrame(columns=["Centro/columna", "Rama", "Total plazas"])
+    if not resumen_centro_rama.empty:
+        resumen_centro_rama = resumen_centro_rama[resumen_centro_rama["Total plazas"] > 0].sort_values(["Centro/columna", "Total plazas"], ascending=[True, False]).reset_index(drop=True)
+
+    centro_nivel_rows = []
+    for col in REAL_CENTER_COLUMNS:
+        if col not in df.columns:
+            continue
+        tmp = df.groupby(["Nivel Estudio I", "Nivel Estudio II"], dropna=False)[col].sum().reset_index(name="Total plazas")
+        tmp.insert(0, "Centro/columna", col)
+        centro_nivel_rows.append(tmp)
+    resumen_centro_nivel = pd.concat(centro_nivel_rows, ignore_index=True) if centro_nivel_rows else pd.DataFrame(columns=["Centro/columna", "Nivel Estudio I", "Nivel Estudio II", "Total plazas"])
+    if not resumen_centro_nivel.empty:
+        resumen_centro_nivel = resumen_centro_nivel[resumen_centro_nivel["Total plazas"] > 0].sort_values(["Centro/columna", "Total plazas"], ascending=[True, False]).reset_index(drop=True)
+
+    top_titulaciones = pd.DataFrame(columns=["Nivel Estudio I", "Nivel Estudio II", "Rama", "Titulación", "Total plazas"])
+    if all(c in df.columns for c in KEY_COLUMNS + ["Total"]):
+        top_titulaciones = (
+            df.groupby(KEY_COLUMNS, dropna=False)["Total"].sum().reset_index(name="Total plazas")
+            .sort_values("Total plazas", ascending=False)
+            .reset_index(drop=True)
+        )
+        top_titulaciones = top_titulaciones[top_titulaciones["Total plazas"] > 0].head(25)
+
+    return {
+        "Dashboard": resumen_global,
+        "Resumen_Global": resumen_global,
+        "Resumen_Provincia": resumen_provincia,
+        "Resumen_Isla": resumen_isla,
+        "Resumen_Centro": resumen_centro,
+        "Resumen_Rama": resumen_rama,
+        "Resumen_Nivel": resumen_nivel,
+        "Resumen_Centro_Rama": resumen_centro_rama,
+        "Resumen_Centro_Nivel": resumen_centro_nivel,
+        "Top_Titulaciones": top_titulaciones,
+    }
+
+
+
+def build_current_analytics_from_supabase() -> tuple[bool, str, dict[str, pd.DataFrame] | None]:
+    """Genera analítica rápida con la última versión finalizada por centro."""
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado.", None
+    try:
+        borradores, _duplicados = get_latest_finalized_drafts()
+        if not borradores:
+            return False, "No hay expedientes finalizados para analizar.", None
+        status_df, _missing = get_admin_centros_status()
+        matriz = limpiar_columnas_matriz(load_catalogo())
+        for borrador in borradores:
+            codigo = borrador.get("codigo_borrador", "")
+            unidad = borrador.get("unidad_docente", "")
+            columna_excel = COLUMNA_EXCEL_POR_DIRECCION.get(unidad, "")
+            if not codigo:
+                continue
+            resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo).execute()
+            for row in getattr(resp, "data", []) or []:
+                item = {
+                    "Nivel Estudio I": row.get("nivel_i", ""),
+                    "Nivel Estudio II": row.get("nivel_ii", ""),
+                    "Rama": row.get("rama", ""),
+                    "Titulación": row.get("titulacion", ""),
+                    "Nº alumnos": int(row.get("numero_alumnos") or 0),
+                }
+                volcar_registro_en_matriz(matriz, item, columna_excel)
+        return True, "Analítica generada.", build_analytics_tables(matriz, status_df)
+    except Exception as exc:
+        return False, f"Error al generar analítica: {exc}", None
+
+
+def render_streamlit_dashboard(analytics: dict[str, pd.DataFrame]) -> None:
+    global_df = analytics.get("Resumen_Global", pd.DataFrame())
+    values = dict(zip(global_df.get("Indicador", []), global_df.get("Valor", []))) if not global_df.empty else {}
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total plazas", values.get("Total plazas", 0))
+    c2.metric("Las Palmas", values.get("Total provincia Las Palmas", 0))
+    c3.metric("S/C Tenerife", values.get("Total provincia S/C Tenerife", 0))
+    c4.metric("Centros pendientes", values.get("Centros pendientes/sin finalizar", 0))
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("#### Por isla")
+        isla = analytics.get("Resumen_Isla", pd.DataFrame())
+        if not isla.empty:
+            st.bar_chart(isla.set_index("Isla")["Total plazas"])
+            st.dataframe(isla, use_container_width=True, hide_index=True)
+    with col_b:
+        st.markdown("#### Por rama")
+        rama = analytics.get("Resumen_Rama", pd.DataFrame())
+        if not rama.empty:
+            st.bar_chart(rama.head(10).set_index("Rama")["Total plazas"])
+            st.dataframe(rama.head(10), use_container_width=True, hide_index=True)
+
+    st.markdown("#### Top titulaciones")
+    top = analytics.get("Top_Titulaciones", pd.DataFrame())
+    if not top.empty:
+        st.dataframe(top.head(15), use_container_width=True, hide_index=True)
+
+def build_dashboard_text(analytics: dict[str, pd.DataFrame]) -> list[str]:
+    global_df = analytics.get("Resumen_Global", pd.DataFrame())
+    values = dict(zip(global_df.get("Indicador", []), global_df.get("Valor", []))) if not global_df.empty else {}
+    return [
+        f"Total de plazas: {values.get('Total plazas', 0)}",
+        f"Provincia Las Palmas: {values.get('Total provincia Las Palmas', 0)}",
+        f"Provincia S/C Tenerife: {values.get('Total provincia S/C Tenerife', 0)}",
+        f"Centros finalizados: {values.get('Centros finalizados', 0)}",
+        f"Centros pendientes/sin finalizar: {values.get('Centros pendientes/sin finalizar', 0)}",
+    ]
+
+
+def add_pdf_table(story: list, title: str, df: pd.DataFrame, styles, max_rows: int = 20) -> None:
+    if df is None or df.empty:
+        return
+    story.append(Paragraph(title, styles["Heading2"]))
+    show = df.head(max_rows).copy().fillna("")
+    data = [list(show.columns)] + show.astype(str).values.tolist()
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 7),
+        ("FONTSIZE", (0, 1), (-1, -1), 6.5),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 8))
+
+def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[str], analytics: dict[str, pd.DataFrame] | None = None) -> bytes:
     if SimpleDocTemplate is None or Table is None:
         raise RuntimeError("La librería reportlab no está instalada. Añada reportlab a requirements.txt y reinicie la app.")
 
@@ -1086,6 +1333,18 @@ def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[
     for linea in resumen_lineas:
         story.append(Paragraph(str(linea), styles["Normal"]))
     story.append(Spacer(1, 8))
+
+    if analytics:
+        story.append(Paragraph("Dashboard resumen", styles["Heading1"]))
+        for linea in build_dashboard_text(analytics):
+            story.append(Paragraph(str(linea), styles["Normal"]))
+        story.append(Spacer(1, 8))
+        add_pdf_table(story, "Resumen por provincia", analytics.get("Resumen_Provincia", pd.DataFrame()), styles, max_rows=10)
+        add_pdf_table(story, "Resumen por isla", analytics.get("Resumen_Isla", pd.DataFrame()), styles, max_rows=10)
+        add_pdf_table(story, "Top centros docentes / columnas", analytics.get("Resumen_Centro", pd.DataFrame()), styles, max_rows=15)
+        add_pdf_table(story, "Top ramas", analytics.get("Resumen_Rama", pd.DataFrame()), styles, max_rows=15)
+        add_pdf_table(story, "Top titulaciones", analytics.get("Top_Titulaciones", pd.DataFrame()), styles, max_rows=15)
+        story.append(Paragraph("Matriz DCD completa", styles["Heading1"]))
 
     df = matriz_pdf.copy().fillna("")
     # Reducimos textos largos para que la matriz sea imprimible en PDF.
@@ -1164,6 +1423,8 @@ def build_publication_package() -> tuple[bool, str, dict | None]:
                 **item,
             })
 
+    analytics = build_analytics_tables(matriz, status_df)
+
     ok_xlsx, msg_xlsx, excel_bytes, excel_filename = build_consolidated_excel_from_supabase()
     if not ok_xlsx or not excel_bytes:
         return False, msg_xlsx, None
@@ -1171,13 +1432,14 @@ def build_publication_package() -> tuple[bool, str, dict | None]:
     fecha = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     pdf_bytes = generate_matriz_pdf(
         matriz,
-        titulo="DATOS CAPACIDAD DOCENTE (DCD 1.0) - Matriz DCD",
+        titulo="DATOS CAPACIDAD DOCENTE (DCD 1.0) - Informe de publicación",
         resumen_lineas=[
             f"Fecha de generación: {fecha}",
             f"Expedientes finalizados incorporados: {len(codigos_usados)}",
             f"Centros docentes pendientes: {len(missing_centros)}",
             "Criterio: última versión finalizada por centro docente.",
         ],
+        analytics=analytics,
     )
 
     return True, "Paquete de publicación generado.", {
@@ -1190,6 +1452,7 @@ def build_publication_package() -> tuple[bool, str, dict | None]:
         "borradores": borradores,
         "duplicados": duplicados,
         "registros_consolidados": registros_consolidados,
+        "analytics": analytics,
         "matriz": matriz,
     }
 
@@ -1309,7 +1572,7 @@ def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) 
             "centros_incluidos": centros_incluidos,
             "centros_pendientes": missing,
             "centros_con_borrador_no_finalizado": package["status_df"].to_dict(orient="records"),
-            "observaciones": "Publicación vigente generada desde DCD 1.0.7.",
+            "observaciones": "Publicación vigente generada desde DCD 1.0.8.",
         }).execute()
         audit_event("publicacion_generada", f"{codigo_publicacion}. Pendientes: {len(missing)}")
     except Exception as exc:
@@ -1457,10 +1720,22 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
         if duplicados_df.empty:
             duplicados_df = pd.DataFrame(columns=["Código borrador ignorado", "Área", "Centro docente", "Actualizado"])
 
+        analytics = build_analytics_tables(matriz, status_df)
+
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             sheets = {
                 "Resumen": resumen,
+                "Dashboard": analytics["Dashboard"],
+                "Resumen_Global": analytics["Resumen_Global"],
+                "Resumen_Provincia": analytics["Resumen_Provincia"],
+                "Resumen_Isla": analytics["Resumen_Isla"],
+                "Resumen_Centro": analytics["Resumen_Centro"],
+                "Resumen_Rama": analytics["Resumen_Rama"],
+                "Resumen_Nivel": analytics["Resumen_Nivel"],
+                "Resumen_Centro_Rama": analytics["Resumen_Centro_Rama"],
+                "Resumen_Centro_Nivel": analytics["Resumen_Centro_Nivel"],
+                "Top_Titulaciones": analytics["Top_Titulaciones"],
                 "Estado_centros": status_df,
                 "Borradores_usados": borradores_df,
                 "Registros_DCD": registros_df,
@@ -1501,6 +1776,47 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
 
                 if sheet_name == "Matriz_DCD":
                     aplicar_formulas_matriz(ws, workbook, len(matriz))
+
+            # Dashboard visual básico dentro del Excel: KPIs + gráficos de barras.
+            try:
+                dash_ws = writer.sheets.get("Dashboard")
+                if dash_ws is not None:
+                    title_fmt = workbook.add_format({"bold": True, "font_size": 14, "font_color": "#1F4E78"})
+                    dash_ws.write("D1", "Dashboard DCD - publicación consolidada", title_fmt)
+                    chart1 = workbook.add_chart({"type": "column"})
+                    chart1.add_series({
+                        "name": "Plazas por provincia",
+                        "categories": "=Resumen_Provincia!$A$2:$A$3",
+                        "values": "=Resumen_Provincia!$B$2:$B$3",
+                    })
+                    chart1.set_title({"name": "Plazas por provincia"})
+                    chart1.set_y_axis({"name": "Plazas"})
+                    dash_ws.insert_chart("D3", chart1, {"x_scale": 1.25, "y_scale": 1.15})
+
+                    isla_rows = max(2, min(len(analytics["Resumen_Isla"]) + 1, 8))
+                    chart2 = workbook.add_chart({"type": "bar"})
+                    chart2.add_series({
+                        "name": "Plazas por isla",
+                        "categories": f"=Resumen_Isla!$A$2:$A${isla_rows}",
+                        "values": f"=Resumen_Isla!$B$2:$B${isla_rows}",
+                    })
+                    chart2.set_title({"name": "Plazas por isla"})
+                    chart2.set_x_axis({"name": "Plazas"})
+                    dash_ws.insert_chart("D20", chart2, {"x_scale": 1.25, "y_scale": 1.4})
+
+                    centro_rows = max(2, min(len(analytics["Resumen_Centro"]) + 1, 12))
+                    chart3 = workbook.add_chart({"type": "bar"})
+                    chart3.add_series({
+                        "name": "Top centros/columnas",
+                        "categories": f"=Resumen_Centro!$A$2:$A${centro_rows}",
+                        "values": f"=Resumen_Centro!$B$2:$B${centro_rows}",
+                    })
+                    chart3.set_title({"name": "Top centros docentes / columnas"})
+                    chart3.set_x_axis({"name": "Plazas"})
+                    dash_ws.insert_chart("L3", chart3, {"x_scale": 1.35, "y_scale": 1.45})
+            except Exception:
+                # Los gráficos son un complemento. Si Excel no pudiera crearlos, no debe bloquear el consolidado.
+                pass
 
         output.seek(0)
         filename = f"DCD_CONSOLIDADO_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
@@ -1575,6 +1891,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.5.1:** Corrección del selector de centro docente al crear usuarios.")
     st.markdown("- **DCD 1.0.6:** Guardado versionado, control de centros pendientes y cambio visible a Centros Docentes.")
     st.markdown("- **DCD 1.0.7:** Publicaciones oficiales: PDF Matriz_DCD, histórico/vigente, Supabase Storage y notificación al administrador.")
+    st.markdown("- **DCD 1.0.8:** Dashboard y análisis de publicación: resúmenes por provincia, isla, centro, rama, nivel y titulaciones en Excel/PDF/panel admin.")
 
 
 def page_change_password() -> None:
@@ -2175,6 +2492,13 @@ def render_admin_publicaciones() -> None:
     with col3:
         vigente = next((p for p in publicaciones if p.get("publicacion_vigente")), None)
         st.metric("Publicación vigente", vigente.get("codigo_publicacion", "No") if vigente else "No")
+
+    st.markdown("### Dashboard actual de datos finalizados")
+    ok_dash, msg_dash, analytics_dash = build_current_analytics_from_supabase()
+    if ok_dash and analytics_dash:
+        render_streamlit_dashboard(analytics_dash)
+    else:
+        st.info(msg_dash)
 
     st.markdown("### Estado actual de centros")
     st.dataframe(status_df, use_container_width=True, hide_index=True)

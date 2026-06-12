@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.7)
+# DATOS CAPACIDAD DOCENTE (DCD 1.0.8)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -137,7 +137,7 @@ Comandos habituales:
 
 ```bash
 git add .
-git commit -m "Actualizar DCD 1.0.7"
+git commit -m "Actualizar DCD 1.0.8"
 git push
 ```
 
@@ -166,7 +166,7 @@ Después de cambiar secretos, haz siempre reboot/restart de la app para que Stre
 9. Guardado como finalizado.
 10. Envío automático opcional.
 
-## 10. Publicaciones oficiales DCD 1.0.7
+## 10. Publicaciones oficiales DCD 1.0.8
 
 Esta versión añade un módulo de publicaciones oficiales:
 
@@ -187,3 +187,29 @@ supabase/schema.sql
 ```
 
 porque añade la tabla `dcd_publicaciones` y el bucket `dcd-publicaciones` en Supabase Storage.
+
+
+## 11. Dashboard y análisis DCD 1.0.8
+
+La versión 1.0.8 añade explotación analítica de la Matriz_DCD:
+
+- Dashboard web en el panel de publicaciones.
+- Resumen global de plazas.
+- Resumen por provincia: Las Palmas y S/C Tenerife.
+- Resumen por isla:
+  - Gran Canaria = CHUIMI + HUGC DN + GAP GC.
+  - Fuerteventura = GSS FV.
+  - Lanzarote = GSS LZ.
+  - Tenerife = GAP TF + CHUC + HUNSC.
+  - La Palma = GSS LP.
+  - La Gomera = GSS LG.
+  - El Hierro = GSS EH.
+- Resumen por centro docente/columna.
+- Resumen por rama.
+- Resumen por nivel de estudios.
+- Resumen centro-rama y centro-nivel.
+- Top titulaciones por número de plazas.
+- Hojas analíticas añadidas al Excel consolidado.
+- PDF de publicación con bloque inicial de dashboard/resumen antes de la matriz completa.
+
+No requiere cambios de base de datos respecto a la versión 1.0.7.
