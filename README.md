@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.8.1)
+# DATOS CAPACIDAD DOCENTE (DCD 1.0.8.2)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -137,7 +137,7 @@ Comandos habituales:
 
 ```bash
 git add .
-git commit -m "Actualizar DCD 1.0.8.1"
+git commit -m "Actualizar DCD 1.0.8.2"
 git push
 ```
 
@@ -166,7 +166,7 @@ Después de cambiar secretos, haz siempre reboot/restart de la app para que Stre
 9. Guardado como finalizado.
 10. Envío automático opcional.
 
-## 10. Publicaciones oficiales DCD 1.0.8.1
+## 10. Publicaciones oficiales DCD 1.0.8.2
 
 Esta versión añade un módulo de publicaciones oficiales:
 
@@ -215,9 +215,9 @@ La versión 1.0.8 añade explotación analítica de la Matriz_DCD:
 La versión 1.0.8 no requería cambios de base de datos respecto a la versión 1.0.7.
 
 
-## 12. Cierre configurable DCD 1.0.8.1
+## 12. Cierre configurable DCD 1.0.8.2
 
-La versión 1.0.8.1 incorpora el bloque de cierre configurable:
+La versión 1.0.8.2 incorpora y refuerza el bloque de cierre configurable:
 
 - Fecha tope de cierre.
 - Modo de cierre configurable desde el panel administrador:
@@ -238,3 +238,15 @@ supabase/schema.sql
 ```
 
 porque añade la tabla `dcd_configuracion`.
+
+
+## 13. DCD 1.0.8.2 - Refuerzo de cierre automático
+
+Esta versión deja explícitos y reforzados estos disparadores de cierre:
+
+- Comprobación automática cuando un centro finaliza expediente.
+- Comprobación automática cuando cualquier usuario entra en la app.
+- Botón de administrador **Evaluar ahora cierre automático**.
+- Aviso claro en panel de cierre: Streamlit no ejecuta procesos permanentes en segundo plano; la fecha tope se evalúa cuando la app es utilizada o mediante evaluación manual del admin.
+
+No requiere SQL nuevo si ya se ejecutó el `schema.sql` de la 1.0.8.1.

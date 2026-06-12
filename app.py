@@ -35,7 +35,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.8.1"
+APP_VERSION = "DCD 1.0.8.2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -1738,7 +1738,7 @@ def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) 
             "centros_incluidos": centros_incluidos,
             "centros_pendientes": missing,
             "centros_con_borrador_no_finalizado": package["status_df"].to_dict(orient="records"),
-            "observaciones": "Publicación vigente generada desde DCD 1.0.8.1.",
+            "observaciones": "Publicación vigente generada desde DCD 1.0.8.2.",
         }).execute()
         audit_event("publicacion_generada", f"{codigo_publicacion}. Pendientes: {len(missing)}")
     except Exception as exc:
@@ -2070,6 +2070,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.7:** Publicaciones oficiales: PDF Matriz_DCD, histórico/vigente, Supabase Storage y notificación al administrador.")
     st.markdown("- **DCD 1.0.8:** Dashboard y análisis de publicación: resúmenes por provincia, isla, centro, rama, nivel y titulaciones en Excel/PDF/panel admin.")
     st.markdown("- **DCD 1.0.8.1:** Cierre configurable: fecha tope, modos de cierre, avisos previos y publicación automática por vencimiento si procede.")
+    st.markdown("- **DCD 1.0.8.2:** Refuerzo de evaluación de cierre al acceder cualquier usuario, al finalizar centros y desde botón admin.")
 
 
 def page_change_password() -> None:
@@ -2762,8 +2763,10 @@ def render_admin_cierre() -> None:
         """
         Configure cómo debe comportarse el sistema cuando los centros docentes finalizan sus expedientes.
 
-        Importante: Streamlit no ejecuta tareas en segundo plano de forma permanente. La fecha tope se evalúa cuando un usuario accede a la app,
-        cuando un centro finaliza expediente o cuando el admin pulsa evaluación manual.
+        Importante: Streamlit no ejecuta tareas en segundo plano de forma permanente. La fecha tope se evalúa cuando cualquier usuario accede a la app,
+        cuando un centro finaliza expediente o cuando el admin pulsa **Evaluar ahora cierre automático**.
+
+        Esto significa que no es necesario que entre el administrador para que se dispare la comprobación: también puede dispararla internamente un centro docente al acceder o finalizar. El centro no ve datos ajenos; solo activa la comprobación automática del sistema.
         """
     )
 
@@ -2854,6 +2857,7 @@ def render_admin_cierre() -> None:
                 st.success("No hay centros pendientes que avisar.")
 
     st.caption("Los avisos automáticos dependen de Mailgun. Si Mailgun no está configurado, la app dejará constancia del estado pero no enviará correo.")
+    st.caption("La publicación por fecha tope se evalúa al usar la app o al pulsar 'Evaluar ahora cierre automático'. Para automatismo 24/7 sin accesos habría que añadir una tarea programada externa.")
 
 
 def render_admin_usuarios() -> None:
