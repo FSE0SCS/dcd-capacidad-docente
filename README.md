@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.8)
+# DATOS CAPACIDAD DOCENTE (DCD 1.0.8.1)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -137,7 +137,7 @@ Comandos habituales:
 
 ```bash
 git add .
-git commit -m "Actualizar DCD 1.0.8"
+git commit -m "Actualizar DCD 1.0.8.1"
 git push
 ```
 
@@ -166,7 +166,7 @@ Después de cambiar secretos, haz siempre reboot/restart de la app para que Stre
 9. Guardado como finalizado.
 10. Envío automático opcional.
 
-## 10. Publicaciones oficiales DCD 1.0.8
+## 10. Publicaciones oficiales DCD 1.0.8.1
 
 Esta versión añade un módulo de publicaciones oficiales:
 
@@ -212,4 +212,29 @@ La versión 1.0.8 añade explotación analítica de la Matriz_DCD:
 - Hojas analíticas añadidas al Excel consolidado.
 - PDF de publicación con bloque inicial de dashboard/resumen antes de la matriz completa.
 
-No requiere cambios de base de datos respecto a la versión 1.0.7.
+La versión 1.0.8 no requería cambios de base de datos respecto a la versión 1.0.7.
+
+
+## 12. Cierre configurable DCD 1.0.8.1
+
+La versión 1.0.8.1 incorpora el bloque de cierre configurable:
+
+- Fecha tope de cierre.
+- Modo de cierre configurable desde el panel administrador:
+  1. Publicar automáticamente solo cuando todos finalicen.
+  2. Publicar automáticamente al llegar la fecha tope aunque falten centros.
+  3. Solo publicación manual por admin.
+- Avisos previos al administrador si hay centros pendientes y se acerca la fecha tope.
+- Aviso manual de centros pendientes.
+- Registro del motivo de publicación automática o por fecha tope.
+- Evaluación manual del cierre automático desde el panel administrador.
+
+Importante: Streamlit no ejecuta tareas en segundo plano de forma permanente. La fecha tope y los avisos se evalúan cuando un usuario accede a la app, cuando un centro finaliza expediente o cuando el admin pulsa evaluación manual.
+
+Para esta versión es obligatorio ejecutar de nuevo:
+
+```text
+supabase/schema.sql
+```
+
+porque añade la tabla `dcd_configuracion`.

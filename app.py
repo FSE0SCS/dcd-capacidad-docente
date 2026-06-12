@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 import secrets as py_secrets
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -35,7 +35,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.8"
+APP_VERSION = "DCD 1.0.8.1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -1524,6 +1524,172 @@ def send_admin_notification(subject: str, text: str) -> tuple[bool, str]:
         return False, f"Error al enviar notificación: {exc}"
 
 
+# =========================================================
+# CONFIGURACIÓN DE CIERRE / PUBLICACIÓN
+# =========================================================
+DEFAULT_CIERRE_CONFIG = {
+    "modo_cierre": "todos_finalizados",
+    "fecha_tope": "",
+    "dias_aviso_previo": "7",
+    "avisos_admin_activados": "true",
+    "ultimo_aviso_previo": "",
+    "ultima_publicacion_fecha_tope": "",
+}
+
+CIERRE_MODE_LABELS = {
+    "todos_finalizados": "Publicar automáticamente solo cuando todos finalicen",
+    "fecha_tope_con_pendientes": "Publicar automáticamente al llegar la fecha tope aunque falten centros",
+    "manual": "Solo publicación manual por admin",
+}
+
+
+def get_config_value(key: str, default: str = "") -> str:
+    client = get_supabase_client()
+    if client is None:
+        return default
+    try:
+        resp = client.table("dcd_configuracion").select("valor").eq("clave", key).limit(1).execute()
+        rows = getattr(resp, "data", []) or []
+        if rows:
+            return str(rows[0].get("valor") or default)
+    except Exception:
+        return default
+    return default
+
+
+def set_config_value(key: str, value: str) -> tuple[bool, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado."
+    try:
+        client.table("dcd_configuracion").upsert({
+            "clave": key,
+            "valor": str(value),
+            "descripcion": "Configuración DCD",
+            "updated_by": st.session_state.get("current_user", "sistema"),
+        }, on_conflict="clave").execute()
+        return True, "Configuración guardada."
+    except Exception as exc:
+        return False, f"Error al guardar configuración: {exc}"
+
+
+def get_cierre_config() -> dict:
+    cfg = DEFAULT_CIERRE_CONFIG.copy()
+    for key, default in DEFAULT_CIERRE_CONFIG.items():
+        cfg[key] = get_config_value(key, default)
+    if cfg.get("modo_cierre") not in CIERRE_MODE_LABELS:
+        cfg["modo_cierre"] = "todos_finalizados"
+    try:
+        cfg["dias_aviso_previo_int"] = max(0, int(cfg.get("dias_aviso_previo") or 7))
+    except Exception:
+        cfg["dias_aviso_previo_int"] = 7
+    cfg["avisos_admin_activados_bool"] = str(cfg.get("avisos_admin_activados", "true")).lower() in {"1", "true", "sí", "si", "yes"}
+    return cfg
+
+
+def parse_config_date(value: str) -> date | None:
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def today_iso() -> str:
+    return datetime.now().date().isoformat()
+
+
+def maybe_send_deadline_warning() -> str:
+    """Envía aviso previo al admin si la fecha tope está próxima y quedan centros pendientes.
+
+    Nota: Streamlit no ejecuta tareas en segundo plano. Este aviso se evalúa cuando alguien usa la app.
+    """
+    cfg = get_cierre_config()
+    if not cfg.get("avisos_admin_activados_bool"):
+        return ""
+    fecha_tope = parse_config_date(cfg.get("fecha_tope", ""))
+    if not fecha_tope:
+        return ""
+
+    status_df, missing = get_admin_centros_status()
+    if not missing:
+        return ""
+
+    hoy = datetime.now().date()
+    dias = (fecha_tope - hoy).days
+    if dias < 0 or dias > cfg.get("dias_aviso_previo_int", 7):
+        return ""
+
+    aviso_key = f"{hoy.isoformat()}|{fecha_tope.isoformat()}|{len(missing)}"
+    if get_config_value("ultimo_aviso_previo", "") == aviso_key:
+        return ""
+
+    subject = f"DCD - Aviso previo de cierre: faltan {len(missing)} centros"
+    text = (
+        f"Aviso previo de cierre DCD.\n\n"
+        f"Fecha tope configurada: {fecha_tope.strftime('%d/%m/%Y')}\n"
+        f"Días restantes: {dias}\n"
+        f"Modo de cierre: {CIERRE_MODE_LABELS.get(cfg.get('modo_cierre'), cfg.get('modo_cierre'))}\n\n"
+        f"Centros pendientes:\n- " + "\n- ".join(missing) + "\n\n"
+        f"Este aviso se genera automáticamente cuando la app detecta que la fecha tope está próxima."
+    )
+    ok, msg = send_admin_notification(subject, text)
+    if ok:
+        set_config_value("ultimo_aviso_previo", aviso_key)
+        audit_event("aviso_previo_cierre", f"Fecha tope {fecha_tope.isoformat()}. Pendientes: {len(missing)}")
+        return f"Aviso previo enviado al admin. Pendientes: {len(missing)}."
+    return f"No se pudo enviar aviso previo: {msg}"
+
+
+def maybe_deadline_auto_publish() -> str:
+    """Publica automáticamente al llegar fecha tope si el modo lo permite.
+
+    Nota: Streamlit no ejecuta cron real; se evalúa al usar la app.
+    """
+    cfg = get_cierre_config()
+    if cfg.get("modo_cierre") != "fecha_tope_con_pendientes":
+        return ""
+    fecha_tope = parse_config_date(cfg.get("fecha_tope", ""))
+    if not fecha_tope:
+        return ""
+    hoy = datetime.now().date()
+    if hoy < fecha_tope:
+        return ""
+    if get_config_value("ultima_publicacion_fecha_tope", "") == fecha_tope.isoformat():
+        return ""
+
+    status_df, missing = get_admin_centros_status()
+    tipo = "automatica_fecha_tope_con_pendientes" if missing else "automatica_fecha_tope_completa"
+    motivo = (
+        f"Publicación automática por fecha tope ({fecha_tope.strftime('%d/%m/%Y')}). "
+        f"Centros pendientes en el momento de publicación: {len(missing)}."
+    )
+    ok, msg = create_publication(tipo_publicacion=tipo, motivo=motivo, allow_missing=True)
+    if ok:
+        set_config_value("ultima_publicacion_fecha_tope", fecha_tope.isoformat())
+        audit_event("publicacion_fecha_tope", motivo)
+        return f"Publicación automática por fecha tope generada: {msg}"
+
+    send_admin_notification(
+        "DCD - Error en publicación automática por fecha tope",
+        f"Se alcanzó la fecha tope {fecha_tope.strftime('%d/%m/%Y')}, pero no se pudo generar la publicación automática.\n\nDetalle: {msg}",
+    )
+    return f"No se pudo generar publicación por fecha tope: {msg}"
+
+
+def evaluar_cierre_automatico() -> str:
+    mensajes = []
+    msg_aviso = maybe_send_deadline_warning()
+    if msg_aviso:
+        mensajes.append(msg_aviso)
+    msg_fecha = maybe_deadline_auto_publish()
+    if msg_fecha:
+        mensajes.append(msg_fecha)
+    return " ".join(mensajes)
+
+
 def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
@@ -1572,7 +1738,7 @@ def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) 
             "centros_incluidos": centros_incluidos,
             "centros_pendientes": missing,
             "centros_con_borrador_no_finalizado": package["status_df"].to_dict(orient="records"),
-            "observaciones": "Publicación vigente generada desde DCD 1.0.8.",
+            "observaciones": "Publicación vigente generada desde DCD 1.0.8.1.",
         }).execute()
         audit_event("publicacion_generada", f"{codigo_publicacion}. Pendientes: {len(missing)}")
     except Exception as exc:
@@ -1604,26 +1770,37 @@ def get_publicaciones() -> list[dict]:
         return []
 
 def maybe_auto_publish_if_complete() -> str:
-    """Publica automáticamente cuando todos los centros esperados tienen finalizado.
+    """Publica automáticamente al finalizar un centro si la configuración lo permite.
 
     Nunca debe bloquear la finalización del centro: si falla, se registra/avisa y se devuelve un mensaje informativo.
     """
     try:
+        cfg = get_cierre_config()
+        modo = cfg.get("modo_cierre")
+        if modo == "manual":
+            return "Modo de cierre manual: no se genera publicación automática."
+
         _status_df, missing = get_admin_centros_status()
-        if missing:
-            return f"Quedan {len(missing)} centros pendientes; no se genera publicación automática todavía."
-        ok, msg = create_publication(
-            tipo_publicacion="automatica",
-            motivo="Publicación automática generada al estar todos los centros docentes finalizados.",
-            allow_missing=False,
-        )
-        if ok:
-            return f"Se ha generado publicación automática: {msg}"
-        send_admin_notification(
-            "DCD - Error al generar publicación automática",
-            f"Todos los centros parecen finalizados, pero no se pudo generar la publicación automática.\n\nDetalle: {msg}",
-        )
-        return f"Todos los centros están finalizados, pero no se pudo generar la publicación automática: {msg}"
+        if not missing:
+            ok, msg = create_publication(
+                tipo_publicacion="automatica",
+                motivo="Publicación automática generada al estar todos los centros docentes finalizados.",
+                allow_missing=False,
+            )
+            if ok:
+                return f"Se ha generado publicación automática: {msg}"
+            send_admin_notification(
+                "DCD - Error al generar publicación automática",
+                f"Todos los centros parecen finalizados, pero no se pudo generar la publicación automática.\n\nDetalle: {msg}",
+            )
+            return f"Todos los centros están finalizados, pero no se pudo generar la publicación automática: {msg}"
+
+        if modo == "fecha_tope_con_pendientes":
+            msg_fecha = maybe_deadline_auto_publish()
+            if msg_fecha:
+                return msg_fecha
+
+        return f"Quedan {len(missing)} centros pendientes; no se genera publicación automática todavía."
     except Exception as exc:
         send_admin_notification(
             "DCD - Error inesperado en publicación automática",
@@ -1892,6 +2069,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.6:** Guardado versionado, control de centros pendientes y cambio visible a Centros Docentes.")
     st.markdown("- **DCD 1.0.7:** Publicaciones oficiales: PDF Matriz_DCD, histórico/vigente, Supabase Storage y notificación al administrador.")
     st.markdown("- **DCD 1.0.8:** Dashboard y análisis de publicación: resúmenes por provincia, isla, centro, rama, nivel y titulaciones en Excel/PDF/panel admin.")
+    st.markdown("- **DCD 1.0.8.1:** Cierre configurable: fecha tope, modos de cierre, avisos previos y publicación automática por vencimiento si procede.")
 
 
 def page_change_password() -> None:
@@ -2578,6 +2756,106 @@ def render_admin_publicaciones() -> None:
                 else:
                     st.error(msg)
 
+def render_admin_cierre() -> None:
+    st.subheader("Cierre y publicación automática")
+    st.markdown(
+        """
+        Configure cómo debe comportarse el sistema cuando los centros docentes finalizan sus expedientes.
+
+        Importante: Streamlit no ejecuta tareas en segundo plano de forma permanente. La fecha tope se evalúa cuando un usuario accede a la app,
+        cuando un centro finaliza expediente o cuando el admin pulsa evaluación manual.
+        """
+    )
+
+    if not supabase_available():
+        st.warning("Supabase no está configurado. No se puede guardar configuración de cierre.")
+        return
+
+    cfg = get_cierre_config()
+    status_df, missing_centros = get_admin_centros_status()
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Centros pendientes", len(missing_centros))
+    with c2:
+        fecha_txt = cfg.get("fecha_tope") or "No definida"
+        st.metric("Fecha tope", fecha_txt)
+    with c3:
+        st.metric("Modo", CIERRE_MODE_LABELS.get(cfg.get("modo_cierre"), cfg.get("modo_cierre")))
+
+    st.markdown("### Configuración")
+    mode_keys = list(CIERRE_MODE_LABELS.keys())
+    mode_labels = [CIERRE_MODE_LABELS[k] for k in mode_keys]
+    current_mode = cfg.get("modo_cierre", "todos_finalizados")
+    selected_label = st.selectbox(
+        "Modo de cierre",
+        options=mode_labels,
+        index=mode_keys.index(current_mode) if current_mode in mode_keys else 0,
+    )
+    selected_mode = mode_keys[mode_labels.index(selected_label)]
+
+    fecha_actual = parse_config_date(cfg.get("fecha_tope", ""))
+    usar_fecha = st.checkbox("Definir fecha tope", value=fecha_actual is not None)
+    fecha_tope_val = None
+    if usar_fecha:
+        fecha_tope_val = st.date_input(
+            "Fecha tope",
+            value=fecha_actual or (datetime.now().date() + timedelta(days=30)),
+            format="DD/MM/YYYY",
+        )
+    dias_aviso = st.number_input(
+        "Días de aviso previo al admin",
+        min_value=0,
+        max_value=60,
+        value=int(cfg.get("dias_aviso_previo_int", 7)),
+        step=1,
+    )
+    avisos_activos = st.checkbox("Activar avisos por correo al admin", value=bool(cfg.get("avisos_admin_activados_bool", True)))
+
+    if st.button("Guardar configuración de cierre"):
+        errors = []
+        for key, value in [
+            ("modo_cierre", selected_mode),
+            ("fecha_tope", fecha_tope_val.isoformat() if usar_fecha and fecha_tope_val else ""),
+            ("dias_aviso_previo", str(int(dias_aviso))),
+            ("avisos_admin_activados", "true" if avisos_activos else "false"),
+        ]:
+            ok, msg = set_config_value(key, value)
+            if not ok:
+                errors.append(msg)
+        if errors:
+            st.error(" | ".join(errors))
+        else:
+            audit_event("configuracion_cierre_actualizada", f"Modo: {selected_mode}. Fecha tope: {fecha_tope_val if usar_fecha else 'sin fecha'}")
+            st.success("Configuración de cierre guardada correctamente.")
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("### Evaluación manual")
+    st.dataframe(status_df, use_container_width=True, hide_index=True)
+
+    col_eval, col_aviso = st.columns(2)
+    with col_eval:
+        if st.button("Evaluar ahora cierre automático"):
+            msg = evaluar_cierre_automatico()
+            if msg:
+                st.info(msg)
+            else:
+                st.success("Evaluación realizada. No hay acciones automáticas pendientes ahora mismo.")
+    with col_aviso:
+        if st.button("Enviar aviso de pendientes ahora"):
+            if missing_centros:
+                ok, msg = send_missing_centros_email(missing_centros, status_df)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.warning(msg)
+            else:
+                st.success("No hay centros pendientes que avisar.")
+
+    st.caption("Los avisos automáticos dependen de Mailgun. Si Mailgun no está configurado, la app dejará constancia del estado pero no enviará correo.")
+
+
 def render_admin_usuarios() -> None:
     st.subheader("Usuarios y permisos")
     st.info("Las contraseñas se guardan hasheadas. El administrador puede resetearlas, pero no verlas.")
@@ -2673,11 +2951,13 @@ def page_admin_consolidado() -> None:
             st.rerun()
         return
 
-    tab_consolidado, tab_publicaciones, tab_usuarios = st.tabs(["Consolidado", "Publicaciones", "Usuarios"])
+    tab_consolidado, tab_publicaciones, tab_cierre, tab_usuarios = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Usuarios"])
     with tab_consolidado:
         render_admin_consolidado()
     with tab_publicaciones:
         render_admin_publicaciones()
+    with tab_cierre:
+        render_admin_cierre()
     with tab_usuarios:
         render_admin_usuarios()
 
@@ -2710,6 +2990,16 @@ try:
 except Exception as exc:
     st.error(f"No se pudo cargar el Excel base: {exc}")
     st.stop()
+
+# Evaluación oportunista de cierre automático/fecha tope.
+# Streamlit no ejecuta procesos en segundo plano; esta comprobación se realiza al usar la app.
+if supabase_available():
+    try:
+        cierre_msg = evaluar_cierre_automatico()
+        if cierre_msg and is_admin():
+            st.sidebar.info(cierre_msg)
+    except Exception:
+        pass
 
 if st.session_state.current_step == 1:
     page_instrucciones()
