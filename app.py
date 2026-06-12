@@ -35,7 +35,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.8.2"
+APP_VERSION = "DCD 1.0.9"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -344,6 +344,11 @@ def get_users_config() -> dict:
 
 def is_admin() -> bool:
     return st.session_state.get("current_user_role") == "admin"
+
+
+def is_external_viewer() -> bool:
+    """Usuarios de consulta externa: solo pueden ver la publicación vigente."""
+    return st.session_state.get("current_user_role") in {"consulta", "externo", "entidad_externa"}
 
 
 def user_scope_unidad() -> str:
@@ -728,8 +733,8 @@ def save_user_to_supabase(
         return False, "Debe indicar un nombre de usuario."
     if not password:
         return False, "Debe indicar una contraseña temporal."
-    if role != "admin" and not unidad_docente:
-        return False, "Los usuarios no administradores deben tener un centro docente asignado."
+    if role == "usuario" and not unidad_docente:
+        return False, "Los usuarios de centro docente deben tener un centro docente asignado."
 
     codigo_unidad = CODIGOS_DIRECCION.get(unidad_docente, safe_code(unidad_docente)) if unidad_docente else ""
 
@@ -1769,6 +1774,104 @@ def get_publicaciones() -> list[dict]:
     except Exception:
         return []
 
+
+def get_publicacion_vigente() -> dict | None:
+    """Devuelve la publicación marcada como vigente. Solo hay una vigente por diseño."""
+    client = get_supabase_client()
+    if client is None:
+        return None
+    try:
+        resp = (
+            client.table("dcd_publicaciones")
+            .select("*")
+            .eq("publicacion_vigente", True)
+            .order("fecha_publicacion", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(resp, "data", []) or []
+        return rows[0] if rows else None
+    except Exception:
+        pubs = get_publicaciones()
+        return next((p for p in pubs if p.get("publicacion_vigente")), None)
+
+
+def load_analytics_from_publication_excel(pub: dict) -> tuple[bool, str, dict[str, pd.DataFrame] | None]:
+    """Lee las hojas analíticas del Excel publicado para que el portal muestre exactamente la publicación vigente."""
+    ruta_excel = (pub or {}).get("ruta_excel", "")
+    if not ruta_excel:
+        return False, "La publicación vigente no tiene ruta de Excel asociada.", None
+
+    ok, data, msg = download_publication_file(ruta_excel)
+    if not ok or not data:
+        return False, msg, None
+
+    try:
+        xls = pd.ExcelFile(io.BytesIO(data))
+        sheets = [
+            "Resumen_Global",
+            "Resumen_Provincia",
+            "Resumen_Isla",
+            "Resumen_Centro",
+            "Resumen_Rama",
+            "Resumen_Nivel",
+            "Resumen_Centro_Rama",
+            "Resumen_Centro_Nivel",
+            "Top_Titulaciones",
+            "Estado_centros",
+        ]
+        analytics: dict[str, pd.DataFrame] = {}
+        for sheet in sheets:
+            if sheet in xls.sheet_names:
+                analytics[sheet] = pd.read_excel(xls, sheet_name=sheet)
+        if "Resumen_Global" not in analytics:
+            return False, "El Excel publicado no contiene hojas analíticas. Genere una nueva publicación con la versión actual.", None
+        return True, "Analítica de publicación cargada.", analytics
+    except Exception as exc:
+        return False, f"Error al leer el Excel publicado: {exc}", None
+
+
+def render_publication_metadata(pub: dict) -> None:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Publicación vigente", pub.get("codigo_publicacion", ""))
+    with col2:
+        st.metric("Versión", pub.get("version_publicacion", ""))
+    with col3:
+        st.metric("Fecha", str(pub.get("fecha_publicacion", ""))[:19])
+
+    st.caption(f"Tipo: {pub.get('tipo_publicacion', '')} | Motivo: {pub.get('motivo_publicacion', '')}")
+
+
+def render_publication_downloads(pub: dict, prefix: str = "portal") -> None:
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Preparar PDF", key=f"{prefix}_prepare_pdf"):
+            ok, data, msg = download_publication_file(pub.get("ruta_pdf", ""))
+            if ok and data:
+                st.download_button(
+                    "Descargar PDF de informe",
+                    data=data,
+                    file_name=f"{pub.get('codigo_publicacion', 'DCD')}_Matriz_DCD.pdf",
+                    mime="application/pdf",
+                    key=f"{prefix}_download_pdf",
+                )
+            else:
+                st.error(msg)
+    with c2:
+        if st.button("Preparar Excel", key=f"{prefix}_prepare_excel"):
+            ok, data, msg = download_publication_file(pub.get("ruta_excel", ""))
+            if ok and data:
+                st.download_button(
+                    "Descargar Excel consolidado",
+                    data=data,
+                    file_name=f"{pub.get('codigo_publicacion', 'DCD')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"{prefix}_download_excel",
+                )
+            else:
+                st.error(msg)
+
 def maybe_auto_publish_if_complete() -> str:
     """Publica automáticamente al finalizar un centro si la configuración lo permite.
 
@@ -2033,6 +2136,9 @@ def app_sidebar() -> None:
         if st.sidebar.button("Panel administrador"):
             st.session_state.current_step = 6
             st.rerun()
+    elif is_external_viewer():
+        st.sidebar.markdown("---")
+        st.sidebar.info("Acceso de consulta: solo publicación vigente.")
 
     st.sidebar.markdown("---")
     if st.sidebar.button("Salir del aplicativo 🚪"):
@@ -2071,6 +2177,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.8:** Dashboard y análisis de publicación: resúmenes por provincia, isla, centro, rama, nivel y titulaciones en Excel/PDF/panel admin.")
     st.markdown("- **DCD 1.0.8.1:** Cierre configurable: fecha tope, modos de cierre, avisos previos y publicación automática por vencimiento si procede.")
     st.markdown("- **DCD 1.0.8.2:** Refuerzo de evaluación de cierre al acceder cualquier usuario, al finalizar centros y desde botón admin.")
+    st.markdown("- **DCD 1.0.9:** Portal externo de consulta de publicación vigente con dashboard y descargas limitadas.")
 
 
 def page_change_password() -> None:
@@ -2877,14 +2984,16 @@ def render_admin_usuarios() -> None:
     st.markdown("---")
     st.markdown("### Crear o actualizar usuario")
 
-    role = st.selectbox("Rol", options=["usuario", "admin"], key="admin_user_role")
+    role = st.selectbox("Rol", options=["usuario", "consulta", "admin"], key="admin_user_role")
     area = ""
     unidad_docente = ""
 
-    if role != "admin":
+    if role == "usuario":
         area = st.selectbox("Área asignada", options=[""] + AREA_OPTIONS, key="admin_user_area")
         direccion_options = DIRECCIONES_POR_AREA.get(area, [])
         unidad_docente = st.selectbox("Centro docente asignado", options=[""] + direccion_options, key="admin_user_unidad")
+    elif role == "consulta":
+        st.info("Los usuarios de consulta externa solo pueden ver la publicación vigente. No quedan vinculados a un centro docente.")
     else:
         st.info("Los usuarios administradores no quedan vinculados a un centro docente concreto.")
 
@@ -2945,6 +3054,46 @@ def render_admin_usuarios() -> None:
                     st.error(msg)
 
 
+def page_portal_externo() -> None:
+    st.title("Portal de consulta - DATOS CAPACIDAD DOCENTE")
+    st.markdown("---")
+    app_sidebar()
+
+    st.subheader("Publicación vigente")
+    st.info("Este portal muestra únicamente la publicación vigente. Las versiones históricas solo están disponibles para el administrador.")
+
+    if not supabase_available():
+        st.warning("Supabase no está configurado. No se puede consultar la publicación vigente.")
+        return
+
+    pub = get_publicacion_vigente()
+    if not pub:
+        st.warning("Todavía no hay una publicación vigente disponible.")
+        return
+
+    render_publication_metadata(pub)
+
+    ok, msg, analytics = load_analytics_from_publication_excel(pub)
+    if ok and analytics:
+        st.markdown("### Resumen de datos")
+        render_streamlit_dashboard(analytics)
+
+        with st.expander("Ver tablas resumen completas"):
+            for sheet_name in ["Resumen_Provincia", "Resumen_Isla", "Resumen_Centro", "Resumen_Rama", "Resumen_Nivel", "Top_Titulaciones"]:
+                df = analytics.get(sheet_name, pd.DataFrame())
+                if not df.empty:
+                    st.markdown(f"#### {sheet_name.replace('_', ' ')}")
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.warning(msg)
+
+    st.markdown("---")
+    st.markdown("### Descargas")
+    render_publication_downloads(pub, prefix="external_portal")
+
+    audit_event("consulta_publicacion_vigente", f"Consulta externa de {pub.get('codigo_publicacion', '')}")
+
+
 def page_admin_consolidado() -> None:
     st.header("Panel administrador")
 
@@ -2982,6 +3131,10 @@ if not st.session_state.logged_in:
 
 if st.session_state.get("must_change_password"):
     page_change_password()
+    st.stop()
+
+if is_external_viewer():
+    page_portal_externo()
     st.stop()
 
 st.title(APP_TITLE)

@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.8.2)
+# DATOS CAPACIDAD DOCENTE (DCD 1.0.9)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -22,6 +22,7 @@ Esta versión parte de la DCD 1.0 y añade:
 - Panel administrador con estado de centros finalizados, pendientes y sin datos.
 - Aviso por correo de centros pendientes, si Mailgun está configurado.
 - Cambio visible de `Unidad Docente` a `Centro Docente`.
+- Portal externo de consulta de publicación vigente con dashboard y descargas controladas.
 
 ## 1. Estructura del proyecto
 
@@ -137,7 +138,7 @@ Comandos habituales:
 
 ```bash
 git add .
-git commit -m "Actualizar DCD 1.0.8.2"
+git commit -m "Actualizar DCD 1.0.9"
 git push
 ```
 
@@ -166,7 +167,7 @@ Después de cambiar secretos, haz siempre reboot/restart de la app para que Stre
 9. Guardado como finalizado.
 10. Envío automático opcional.
 
-## 10. Publicaciones oficiales DCD 1.0.8.2
+## 10. Publicaciones oficiales DCD 1.0.9
 
 Esta versión añade un módulo de publicaciones oficiales:
 
@@ -215,7 +216,7 @@ La versión 1.0.8 añade explotación analítica de la Matriz_DCD:
 La versión 1.0.8 no requería cambios de base de datos respecto a la versión 1.0.7.
 
 
-## 12. Cierre configurable DCD 1.0.8.2
+## 12. Cierre configurable DCD 1.0.9
 
 La versión 1.0.8.2 incorpora y refuerza el bloque de cierre configurable:
 
@@ -240,7 +241,7 @@ supabase/schema.sql
 porque añade la tabla `dcd_configuracion`.
 
 
-## 13. DCD 1.0.8.2 - Refuerzo de cierre automático
+## 13. DCD 1.0.9 - Refuerzo de cierre automático
 
 Esta versión deja explícitos y reforzados estos disparadores de cierre:
 
@@ -250,3 +251,26 @@ Esta versión deja explícitos y reforzados estos disparadores de cierre:
 - Aviso claro en panel de cierre: Streamlit no ejecuta procesos permanentes en segundo plano; la fecha tope se evalúa cuando la app es utilizada o mediante evaluación manual del admin.
 
 No requiere SQL nuevo si ya se ejecutó el `schema.sql` de la 1.0.8.1.
+
+## 14. Portal externo DCD 1.0.9
+
+La versión 1.0.9 añade un portal de consulta para entidades externas.
+
+Características:
+
+- Nuevo rol de usuario: `consulta`.
+- Los usuarios con rol `consulta` no acceden al flujo de carga ni al panel administrador.
+- Solo ven la publicación marcada como vigente.
+- Ven un dashboard de lectura construido desde el Excel de la publicación vigente.
+- Pueden descargar el PDF de informe y el Excel consolidado vigentes.
+- Las publicaciones históricas siguen estando reservadas al administrador.
+
+No requiere SQL nuevo si ya existe la tabla `dcd_usuarios` creada en versiones anteriores.
+
+Para crear un usuario externo:
+
+1. Entrar como `admin`.
+2. Ir a `Panel administrador > Usuarios`.
+3. Crear usuario con rol `consulta`.
+4. Asignar contraseña temporal.
+5. El usuario externo accederá directamente al portal de publicación vigente.
