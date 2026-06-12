@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.9)
+# DATOS CAPACIDAD DOCENTE (DCD 1.0.9.1)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -138,7 +138,7 @@ Comandos habituales:
 
 ```bash
 git add .
-git commit -m "Actualizar DCD 1.0.9"
+git commit -m "Actualizar DCD 1.0.9.1"
 git push
 ```
 
@@ -167,7 +167,7 @@ Después de cambiar secretos, haz siempre reboot/restart de la app para que Stre
 9. Guardado como finalizado.
 10. Envío automático opcional.
 
-## 10. Publicaciones oficiales DCD 1.0.9
+## 10. Publicaciones oficiales DCD 1.0.9.1
 
 Esta versión añade un módulo de publicaciones oficiales:
 
@@ -216,7 +216,7 @@ La versión 1.0.8 añade explotación analítica de la Matriz_DCD:
 La versión 1.0.8 no requería cambios de base de datos respecto a la versión 1.0.7.
 
 
-## 12. Cierre configurable DCD 1.0.9
+## 12. Cierre configurable DCD 1.0.9.1
 
 La versión 1.0.8.2 incorpora y refuerza el bloque de cierre configurable:
 
@@ -241,7 +241,7 @@ supabase/schema.sql
 porque añade la tabla `dcd_configuracion`.
 
 
-## 13. DCD 1.0.9 - Refuerzo de cierre automático
+## 13. DCD 1.0.9.1 - Refuerzo de cierre automático
 
 Esta versión deja explícitos y reforzados estos disparadores de cierre:
 
@@ -252,7 +252,7 @@ Esta versión deja explícitos y reforzados estos disparadores de cierre:
 
 No requiere SQL nuevo si ya se ejecutó el `schema.sql` de la 1.0.8.1.
 
-## 14. Portal externo DCD 1.0.9
+## 14. Portal externo DCD 1.0.9.1
 
 La versión 1.0.9 añade un portal de consulta para entidades externas.
 
@@ -274,3 +274,11 @@ Para crear un usuario externo:
 3. Crear usuario con rol `consulta`.
 4. Asignar contraseña temporal.
 5. El usuario externo accederá directamente al portal de publicación vigente.
+
+
+## DCD 1.0.9.1 - Mantenimiento
+
+- Ajuste visual de tarjetas de publicación vigente para evitar textos cortados.
+- Mantenimiento avanzado de usuarios: activar, desactivar, resetear contraseña y eliminar con confirmación.
+- Recomendación: usar desactivar para bajas ordinarias y eliminar solo cuando proceda limpiar la tabla de usuarios.
+- Si no se ejecutó el SQL del rol consulta, ejecutar `supabase/schema.sql`.

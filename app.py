@@ -35,7 +35,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.9"
+APP_VERSION = "DCD 1.0.9.1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -787,6 +787,24 @@ def set_user_active(username: str, active: bool) -> tuple[bool, str]:
         return True, f"Usuario {'activado' if active else 'desactivado'}: {username}"
     except Exception as exc:
         return False, f"Error al actualizar usuario: {exc}"
+
+
+def delete_user_from_supabase(username: str) -> tuple[bool, str]:
+    """Elimina físicamente un usuario. Usar solo si no se necesita conservarlo en el listado operativo."""
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado."
+    username = (username or "").strip().lower()
+    if not username:
+        return False, "Debe indicar un usuario."
+    if username == (st.session_state.get("current_user") or "").strip().lower():
+        return False, "No puede eliminar el usuario con el que está trabajando ahora mismo."
+    try:
+        client.table("dcd_usuarios").delete().eq("username", username).execute()
+        audit_event("eliminar_usuario", f"Usuario eliminado: {username}")
+        return True, f"Usuario eliminado correctamente: {username}"
+    except Exception as exc:
+        return False, f"Error al eliminar usuario: {exc}"
 
 
 def change_current_user_password(new_password: str, repeat_password: str) -> tuple[bool, str]:
@@ -1831,14 +1849,27 @@ def load_analytics_from_publication_excel(pub: dict) -> tuple[bool, str, dict[st
         return False, f"Error al leer el Excel publicado: {exc}", None
 
 
+def render_info_card(label: str, value: str) -> None:
+    """Tarjeta compacta para evitar cortes con puntos suspensivos en textos largos."""
+    st.markdown(
+        f"""
+        <div style="border:1px solid #e5e7eb; border-radius:10px; padding:0.65rem 0.8rem; background:#f8fafc; min-height:72px;">
+            <div style="font-size:0.78rem; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.02em; margin-bottom:0.25rem;">{label}</div>
+            <div style="font-size:0.98rem; color:#0f172a; font-weight:700; line-height:1.2; word-break:break-word; white-space:normal;">{value or '-'}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_publication_metadata(pub: dict) -> None:
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Publicación vigente", pub.get("codigo_publicacion", ""))
+        render_info_card("Publicación vigente", str(pub.get("codigo_publicacion", "")))
     with col2:
-        st.metric("Versión", pub.get("version_publicacion", ""))
+        render_info_card("Versión", str(pub.get("version_publicacion", "")))
     with col3:
-        st.metric("Fecha", str(pub.get("fecha_publicacion", ""))[:19])
+        render_info_card("Fecha", str(pub.get("fecha_publicacion", ""))[:19])
 
     st.caption(f"Tipo: {pub.get('tipo_publicacion', '')} | Motivo: {pub.get('motivo_publicacion', '')}")
 
@@ -2178,6 +2209,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.8.1:** Cierre configurable: fecha tope, modos de cierre, avisos previos y publicación automática por vencimiento si procede.")
     st.markdown("- **DCD 1.0.8.2:** Refuerzo de evaluación de cierre al acceder cualquier usuario, al finalizar centros y desde botón admin.")
     st.markdown("- **DCD 1.0.9:** Portal externo de consulta de publicación vigente con dashboard y descargas limitadas.")
+    st.markdown("- **DCD 1.0.9.1:** Ajustes de interfaz del portal y mantenimiento avanzado de usuarios.")
 
 
 def page_change_password() -> None:
@@ -3022,7 +3054,8 @@ def render_admin_usuarios() -> None:
                 st.error(msg)
 
     st.markdown("---")
-    st.markdown("### Resetear contraseña / activar usuario")
+    st.markdown("### Mantenimiento de usuarios")
+    st.caption("Recomendación: use primero Desactivar para conservar trazabilidad. Eliminar borra el usuario de la tabla operativa, aunque las auditorías y registros históricos mantienen el nombre de usuario como texto.")
     usernames = [u.get("username", "") for u in users if u.get("username")]
     selected_user = st.selectbox("Usuario existente", options=[""] + usernames)
     new_password = st.text_input("Nueva contraseña temporal", type="password", key="admin_reset_password")
@@ -3052,6 +3085,24 @@ def render_admin_usuarios() -> None:
                     st.success(msg)
                 else:
                     st.error(msg)
+
+    st.markdown("#### Eliminar usuario")
+    st.warning("La eliminación es definitiva para la tabla de usuarios. Para bajas ordinarias, es preferible desactivar el usuario.")
+    confirm_delete = st.text_input("Para eliminar el usuario seleccionado escriba ELIMINAR", key="admin_delete_confirm")
+    if st.button("Eliminar usuario definitivamente", type="secondary"):
+        if not selected_user:
+            st.error("Seleccione primero un usuario.")
+        elif selected_user == st.session_state.get("current_user"):
+            st.warning("No puede eliminar el usuario con el que está trabajando ahora mismo.")
+        elif confirm_delete != "ELIMINAR":
+            st.error("Debe escribir ELIMINAR exactamente para confirmar.")
+        else:
+            ok, msg = delete_user_from_supabase(selected_user)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
 
 def page_portal_externo() -> None:

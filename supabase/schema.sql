@@ -94,7 +94,7 @@ create table if not exists public.dcd_usuarios (
     password_hash text not null,
     activo boolean not null default true,
     must_change_password boolean not null default true,
-    constraint dcd_usuarios_role_check check (role in ('admin', 'usuario'))
+    constraint dcd_usuarios_role_check check (role in ('admin', 'usuario', 'consulta'))
 );
 
 create index if not exists idx_dcd_registros_codigo_borrador
@@ -108,6 +108,42 @@ on public.dcd_auditoria(created_at);
 
 create index if not exists idx_dcd_usuarios_username
 on public.dcd_usuarios(username);
+
+-- DCD 1.0.9.1 - Roles y políticas de usuarios
+alter table public.dcd_usuarios
+drop constraint if exists dcd_usuarios_role_check;
+
+alter table public.dcd_usuarios
+add constraint dcd_usuarios_role_check
+check (role in ('admin', 'usuario', 'consulta'));
+
+alter table public.dcd_usuarios enable row level security;
+
+drop policy if exists "DCD usuarios select" on public.dcd_usuarios;
+drop policy if exists "DCD usuarios insert" on public.dcd_usuarios;
+drop policy if exists "DCD usuarios update" on public.dcd_usuarios;
+drop policy if exists "DCD usuarios delete" on public.dcd_usuarios;
+
+create policy "DCD usuarios select"
+on public.dcd_usuarios
+for select
+using (true);
+
+create policy "DCD usuarios insert"
+on public.dcd_usuarios
+for insert
+with check (true);
+
+create policy "DCD usuarios update"
+on public.dcd_usuarios
+for update
+using (true)
+with check (true);
+
+create policy "DCD usuarios delete"
+on public.dcd_usuarios
+for delete
+using (true);
 
 create index if not exists idx_dcd_borradores_unidad_docente
 on public.dcd_borradores(unidad_docente);
