@@ -19,7 +19,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.5.1"
+APP_VERSION = "DCD 1.0.6"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -152,6 +152,8 @@ def init_session_state() -> None:
         "sel_titulacion": "",
         "numero_alumnos": 0,
         "codigo_borrador": "",
+        "codigo_expediente": "",
+        "version_num": 0,
         "draft_estado": "borrador",
         "permitir_editar_finalizado": False,
         "observaciones": "",
@@ -197,6 +199,24 @@ def safe_code(text: str) -> str:
 def build_codigo_borrador(unidad_docente: str) -> str:
     codigo_unidad = CODIGOS_DIRECCION.get(unidad_docente) or safe_code(unidad_docente)
     return f"DCD-{codigo_unidad}-2026"
+
+
+def build_codigo_version(codigo_expediente: str, version_num: int) -> str:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{codigo_expediente}-V{version_num:03d}-{timestamp}"
+
+
+def expected_centros_docentes() -> list[dict]:
+    rows = []
+    for area, centros in DIRECCIONES_POR_AREA.items():
+        for centro in centros:
+            rows.append({
+                "Área": area,
+                "Centro docente": centro,
+                "Código unidad": CODIGOS_DIRECCION.get(centro, safe_code(centro)),
+                "Columna Excel": COLUMNA_EXCEL_POR_DIRECCION.get(centro, ""),
+            })
+    return rows
 
 
 def registro_key(nivel_i: str, nivel_ii: str, rama: str, titulacion: str) -> str:
@@ -402,7 +422,7 @@ def send_email_with_mailgun(excel_bytes: bytes, filename: str) -> tuple[bool, st
         "Se adjunta el Excel generado por el aplicativo DATOS CAPACIDAD DOCENTE (DCD 1.0).\n\n"
         f"Código de borrador: {codigo}\n"
         f"Área: {st.session_state.area_selected}\n"
-        f"Unidad docente: {st.session_state.direccion_selected}\n"
+        f"Centro docente: {st.session_state.direccion_selected}\n"
         f"Usuario: {st.session_state.get('current_user_display', '')}\n"
         f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
     )
@@ -454,10 +474,14 @@ def registros_to_rows(estado: str = "borrador") -> list[dict]:
     codigo_unidad = CODIGOS_DIRECCION.get(unidad, safe_code(unidad))
     columna_excel = COLUMNA_EXCEL_POR_DIRECCION.get(unidad, "")
     codigo_borrador = st.session_state.codigo_borrador or build_codigo_borrador(unidad)
+    codigo_expediente = st.session_state.codigo_expediente or build_codigo_borrador(unidad)
+    version_num = int(st.session_state.get("version_num") or 1)
 
     for item in st.session_state.registros.values():
         rows.append({
             "codigo_borrador": codigo_borrador,
+            "codigo_expediente": codigo_expediente,
+            "version_num": version_num,
             "estado": estado,
             "area": area,
             "unidad_docente": unidad,
@@ -473,6 +497,25 @@ def registros_to_rows(estado: str = "borrador") -> list[dict]:
     return rows
 
 
+def get_next_version_num(codigo_expediente: str) -> int:
+    client = get_supabase_client()
+    if client is None:
+        return 1
+
+    try:
+        resp = client.table("dcd_borradores").select("version_num").eq("codigo_expediente", codigo_expediente).order("version_num", desc=True).limit(1).execute()
+        rows = getattr(resp, "data", []) or []
+        if rows and rows[0].get("version_num") is not None:
+            return int(rows[0].get("version_num") or 0) + 1
+
+        # Compatibilidad con borradores anteriores a la 1.0.6.
+        legacy_resp = client.table("dcd_borradores").select("codigo_borrador").eq("codigo_borrador", codigo_expediente).limit(1).execute()
+        legacy_rows = getattr(legacy_resp, "data", []) or []
+        return 2 if legacy_rows else 1
+    except Exception:
+        return 1
+
+
 def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
@@ -480,29 +523,36 @@ def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
 
     unidad = st.session_state.direccion_selected
     if not is_admin() and user_scope_unidad() and unidad != user_scope_unidad():
-        return False, "No puede guardar datos de una unidad docente distinta a la asignada a su usuario."
+        return False, "No puede guardar datos de un centro docente distinto al asignado a su usuario."
 
-    codigo_borrador = st.session_state.codigo_borrador or build_codigo_borrador(unidad)
+    codigo_expediente = st.session_state.codigo_expediente or build_codigo_borrador(unidad)
+    version_num = get_next_version_num(codigo_expediente)
+    codigo_borrador = build_codigo_version(codigo_expediente, version_num)
+    saved_at = datetime.now().isoformat()
+    st.session_state.codigo_expediente = codigo_expediente
     st.session_state.codigo_borrador = codigo_borrador
+    st.session_state.version_num = version_num
     codigo_unidad = CODIGOS_DIRECCION.get(unidad, safe_code(unidad))
 
     try:
-        client.table("dcd_borradores").upsert(
-            {
-                "codigo_borrador": codigo_borrador,
-                "app_version": APP_VERSION,
-                "estado": estado,
-                "area": st.session_state.area_selected,
-                "unidad_docente": unidad,
-                "codigo_unidad": codigo_unidad,
-                "observaciones": st.session_state.get("observaciones", ""),
-                "usuario_propietario": st.session_state.get("current_user", ""),
-                "usuario_ultima_edicion": st.session_state.get("current_user", ""),
-            },
-            on_conflict="codigo_borrador",
-        ).execute()
+        client.table("dcd_borradores").update({"is_latest": False}).eq("codigo_expediente", codigo_expediente).execute()
 
-        client.table("dcd_registros").delete().eq("codigo_borrador", codigo_borrador).execute()
+        client.table("dcd_borradores").insert({
+            "codigo_borrador": codigo_borrador,
+            "codigo_expediente": codigo_expediente,
+            "version_num": version_num,
+            "saved_at": saved_at,
+            "is_latest": True,
+            "app_version": APP_VERSION,
+            "estado": estado,
+            "area": st.session_state.area_selected,
+            "unidad_docente": unidad,
+            "codigo_unidad": codigo_unidad,
+            "observaciones": st.session_state.get("observaciones", ""),
+            "usuario_propietario": st.session_state.get("current_user", ""),
+            "usuario_ultima_edicion": st.session_state.get("current_user", ""),
+        }).execute()
+
         rows = registros_to_rows(estado=estado)
         if rows:
             client.table("dcd_registros").insert(rows).execute()
@@ -511,10 +561,10 @@ def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
         if estado == "finalizado":
             st.session_state.permitir_editar_finalizado = False
 
-        audit_event("guardar_borrador" if estado == "borrador" else "guardar_finalizado", f"Estado: {estado}. Registros: {len(rows)}", codigo_borrador)
+        audit_event("guardar_borrador" if estado == "borrador" else "guardar_finalizado", f"Estado: {estado}. Versión: {version_num}. Registros: {len(rows)}", codigo_borrador)
         if estado == "finalizado":
-            return True, f"Expediente finalizado correctamente: {codigo_borrador}"
-        return True, f"Borrador guardado correctamente: {codigo_borrador}"
+            return True, f"Expediente finalizado correctamente como nueva versión: {codigo_borrador}"
+        return True, f"Borrador guardado correctamente como nueva versión: {codigo_borrador}"
     except Exception as exc:
         return False, f"Error al guardar en Supabase: {exc}"
 
@@ -532,7 +582,7 @@ def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
 
         borrador = borradores[0]
         if not is_admin() and user_scope_unidad() and borrador.get("unidad_docente", "") != user_scope_unidad():
-            return False, "No puede cargar un borrador de una unidad docente distinta a la asignada a su usuario."
+            return False, "No puede cargar un borrador de un centro docente distinto al asignado a su usuario."
 
         registros_resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo_borrador).execute()
         rows = getattr(registros_resp, "data", []) or []
@@ -540,6 +590,8 @@ def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
         st.session_state.area_selected = normalizar_area(borrador.get("area", ""))
         st.session_state.direccion_selected = borrador.get("unidad_docente", "")
         st.session_state.codigo_borrador = codigo_borrador
+        st.session_state.codigo_expediente = borrador.get("codigo_expediente") or build_codigo_borrador(st.session_state.direccion_selected)
+        st.session_state.version_num = int(borrador.get("version_num") or 1)
         st.session_state.draft_estado = borrador.get("estado", "borrador") or "borrador"
         st.session_state.permitir_editar_finalizado = False
         st.session_state.observaciones = borrador.get("observaciones", "") or ""
@@ -566,12 +618,18 @@ def list_drafts_from_supabase() -> list[str]:
     if client is None:
         return []
     try:
-        query = client.table("dcd_borradores").select("codigo_borrador, updated_at, estado, unidad_docente")
+        query = client.table("dcd_borradores").select("codigo_borrador, codigo_expediente, version_num, saved_at, updated_at, estado, unidad_docente, is_latest")
         if not is_admin() and user_scope_unidad():
             query = query.eq("unidad_docente", user_scope_unidad())
-        resp = query.order("updated_at", desc=True).limit(50).execute()
+        resp = query.order("saved_at", desc=True).order("updated_at", desc=True).limit(100).execute()
         rows = getattr(resp, "data", []) or []
-        return [f"{r['codigo_borrador']} | {r.get('estado', '')} | {r.get('updated_at', '')}" for r in rows]
+        result = []
+        for r in rows:
+            version = r.get("version_num") or "-"
+            date_value = r.get("saved_at") or r.get("updated_at") or ""
+            latest = " | ÚLTIMO" if r.get("is_latest") else ""
+            result.append(f"{r['codigo_borrador']} | v{version} | {r.get('estado', '')} | {date_value}{latest}")
+        return result
     except Exception:
         return []
 
@@ -609,7 +667,7 @@ def save_user_to_supabase(
     if not password:
         return False, "Debe indicar una contraseña temporal."
     if role != "admin" and not unidad_docente:
-        return False, "Los usuarios no administradores deben tener una unidad docente asignada."
+        return False, "Los usuarios no administradores deben tener un centro docente asignado."
 
     codigo_unidad = CODIGOS_DIRECCION.get(unidad_docente, safe_code(unidad_docente)) if unidad_docente else ""
 
@@ -764,7 +822,7 @@ def build_output_excel() -> bytes:
         "Aplicativo": APP_VERSION,
         "Fecha generación": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Área": st.session_state.area_selected,
-        "Unidad docente": unidad,
+        "Centro docente": unidad,
         "Código unidad": CODIGOS_DIRECCION.get(unidad, safe_code(unidad)),
         "Columna Excel": columna_excel,
         "Código borrador": codigo,
@@ -784,7 +842,7 @@ def build_output_excel() -> bytes:
             registros_df.insert(0, "Código borrador", codigo)
             registros_df.insert(1, "Estado", estado)
             registros_df.insert(2, "Área", st.session_state.area_selected)
-            registros_df.insert(3, "Unidad docente", unidad)
+            registros_df.insert(3, "Centro docente", unidad)
             registros_df.insert(4, "Usuario", usuario)
         registros_df.to_excel(writer, sheet_name="Registros_DCD", index=False)
         matriz.to_excel(writer, sheet_name="Matriz_DCD", index=False)
@@ -833,7 +891,7 @@ def get_latest_finalized_drafts() -> tuple[list[dict], list[dict]]:
     if client is None:
         return [], []
 
-    resp = client.table("dcd_borradores").select("*").eq("estado", "finalizado").order("updated_at", desc=True).execute()
+    resp = client.table("dcd_borradores").select("*").eq("estado", "finalizado").order("saved_at", desc=True).order("updated_at", desc=True).execute()
     borradores = getattr(resp, "data", []) or []
 
     latest_by_unit = {}
@@ -850,6 +908,103 @@ def get_latest_finalized_drafts() -> tuple[list[dict], list[dict]]:
     return list(latest_by_unit.values()), duplicates
 
 
+def get_admin_centros_status() -> tuple[pd.DataFrame, list[str]]:
+    client = get_supabase_client()
+    expected = expected_centros_docentes()
+    if client is None:
+        return pd.DataFrame(expected), []
+
+    try:
+        resp = client.table("dcd_borradores").select("*").order("saved_at", desc=True).order("updated_at", desc=True).execute()
+        borradores = getattr(resp, "data", []) or []
+    except Exception:
+        borradores = []
+
+    by_unit: dict[str, list[dict]] = {}
+    for borrador in borradores:
+        unidad = borrador.get("unidad_docente", "")
+        if unidad:
+            by_unit.setdefault(unidad, []).append(borrador)
+
+    rows = []
+    missing = []
+    for item in expected:
+        centro = item["Centro docente"]
+        versions = by_unit.get(centro, [])
+        latest_any = versions[0] if versions else {}
+        finalized = [v for v in versions if v.get("estado") == "finalizado"]
+        latest_finalized = finalized[0] if finalized else {}
+
+        if latest_finalized:
+            if latest_any and latest_any.get("codigo_borrador") != latest_finalized.get("codigo_borrador"):
+                estado = "Finalizado con borrador posterior"
+            else:
+                estado = "Finalizado"
+            entra = "Sí"
+        elif latest_any:
+            estado = "Pendiente de finalizar"
+            entra = "No"
+            missing.append(centro)
+        else:
+            estado = "Sin datos"
+            entra = "No"
+            missing.append(centro)
+
+        rows.append({
+            **item,
+            "Estado": estado,
+            "Última versión guardada": latest_any.get("codigo_borrador", ""),
+            "Fecha último guardado": latest_any.get("saved_at") or latest_any.get("updated_at", ""),
+            "Último finalizado": latest_finalized.get("codigo_borrador", ""),
+            "Fecha último finalizado": latest_finalized.get("saved_at") or latest_finalized.get("updated_at", ""),
+            "Entra en consolidado": entra,
+            "Versiones guardadas": len(versions),
+        })
+
+    return pd.DataFrame(rows), missing
+
+
+def send_missing_centros_email(missing: list[str], status_df: pd.DataFrame) -> tuple[bool, str]:
+    api_key = get_secret("MAILGUN_API_KEY", "")
+    domain = get_secret("MAILGUN_DOMAIN", "")
+    sender = get_secret("MAILGUN_SENDER_EMAIL", "")
+    recipient = get_secret("MAILGUN_RECIPIENT_EMAIL", "")
+
+    if not all([api_key, domain, sender, recipient]):
+        return False, "Mailgun no está configurado en secrets. Puede revisar el listado de pendientes en pantalla."
+
+    if not missing:
+        return False, "No hay centros pendientes que notificar."
+
+    pending_lines = "\n".join(f"- {centro}" for centro in missing)
+    subject = "DCD - Centros docentes pendientes de finalizar"
+    text = (
+        "Centros docentes pendientes de incorporarse al consolidado DCD:\n\n"
+        f"{pending_lines}\n\n"
+        f"Fecha del aviso: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
+        f"Usuario administrador: {st.session_state.get('current_user_display', '')}\n"
+    )
+
+    try:
+        response = requests.post(
+            f"https://api.mailgun.net/v3/{domain}/messages",
+            auth=("api", api_key),
+            data={
+                "from": sender,
+                "to": recipient,
+                "subject": subject,
+                "text": text,
+            },
+            timeout=30,
+        )
+        if response.status_code == 200:
+            audit_event("aviso_centros_pendientes", f"Pendientes: {len(missing)}")
+            return True, f"Aviso enviado correctamente a {recipient}."
+        return False, f"Error Mailgun {response.status_code}: {response.text}"
+    except Exception as exc:
+        return False, f"Error al enviar aviso: {exc}"
+
+
 def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, str]:
     client = get_supabase_client()
     if client is None:
@@ -859,6 +1014,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
         borradores, duplicados = get_latest_finalized_drafts()
         if not borradores:
             return False, "No hay expedientes finalizados para consolidar.", None, ""
+        status_df, missing_centros = get_admin_centros_status()
 
         catalogo = load_catalogo()
         matriz = limpiar_columnas_matriz(catalogo)
@@ -887,9 +1043,9 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
                 volcar_registro_en_matriz(matriz, item, columna_excel)
                 registros_consolidados.append({
                     "Código borrador": codigo,
-                    "Fecha actualización": borrador.get("updated_at", ""),
+                    "Fecha guardado": borrador.get("saved_at") or borrador.get("updated_at", ""),
                     "Área": normalizar_area(borrador.get("area", "")),
-                    "Unidad docente": unidad,
+                    "Centro docente": unidad,
                     "Columna Excel": columna_excel,
                     **item,
                 })
@@ -898,9 +1054,9 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
         if registros_df.empty:
             registros_df = pd.DataFrame(columns=[
                 "Código borrador",
-                "Fecha actualización",
+                "Fecha guardado",
                 "Área",
-                "Unidad docente",
+                "Centro docente",
                 "Columna Excel",
                 *KEY_COLUMNS,
                 "Nº alumnos",
@@ -912,8 +1068,9 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
             "Tipo": "Consolidado finalizados",
             "Expedientes usados": len(codigos_usados),
             "Registros consolidados": len(registros_consolidados),
+            "Centros docentes pendientes": len(missing_centros),
             "Duplicados finalizados ignorados": len(duplicados),
-            "Criterio": "Último expediente finalizado por unidad docente según updated_at",
+            "Criterio": "Último expediente finalizado por centro docente según fecha de guardado",
             "Usuario generación": st.session_state.get("current_user_display", "") or st.session_state.get("current_user", ""),
         }])
 
@@ -921,7 +1078,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
             "Código borrador": b.get("codigo_borrador", ""),
             "Estado": b.get("estado", ""),
             "Área": normalizar_area(b.get("area", "")),
-            "Unidad docente": b.get("unidad_docente", ""),
+            "Centro docente": b.get("unidad_docente", ""),
             "Código unidad": b.get("codigo_unidad", ""),
             "Actualizado": b.get("updated_at", ""),
             "Columna Excel": COLUMNA_EXCEL_POR_DIRECCION.get(b.get("unidad_docente", ""), ""),
@@ -930,16 +1087,17 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
         duplicados_df = pd.DataFrame([{
             "Código borrador ignorado": b.get("codigo_borrador", ""),
             "Área": normalizar_area(b.get("area", "")),
-            "Unidad docente": b.get("unidad_docente", ""),
+            "Centro docente": b.get("unidad_docente", ""),
             "Actualizado": b.get("updated_at", ""),
         } for b in duplicados])
         if duplicados_df.empty:
-            duplicados_df = pd.DataFrame(columns=["Código borrador ignorado", "Área", "Unidad docente", "Actualizado"])
+            duplicados_df = pd.DataFrame(columns=["Código borrador ignorado", "Área", "Centro docente", "Actualizado"])
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
             sheets = {
                 "Resumen": resumen,
+                "Estado_centros": status_df,
                 "Borradores_usados": borradores_df,
                 "Registros_DCD": registros_df,
                 "Duplicados_ignorados": duplicados_df,
@@ -1000,7 +1158,7 @@ def app_sidebar() -> None:
         st.sidebar.write(f"Usuario: {st.session_state.current_user_display}")
         st.sidebar.caption(f"Rol: {st.session_state.get('current_user_role', '')}")
         if st.session_state.get("current_user_unidad"):
-            st.sidebar.caption(f"Unidad asignada: {st.session_state.current_user_unidad}")
+            st.sidebar.caption(f"Centro asignado: {st.session_state.current_user_unidad}")
 
     if supabase_available():
         st.sidebar.success("Supabase configurado")
@@ -1044,13 +1202,14 @@ def page_login() -> None:
 
     st.markdown("---")
     st.markdown("##### Historial de versiones")
-    st.markdown("- **DCD 1.0:** MVP inicial con contraseña, instrucciones, selección de unidad docente, selectores dependientes y preparación para Supabase.")
+    st.markdown("- **DCD 1.0:** MVP inicial con contraseña, instrucciones, selección de centro docente, selectores dependientes y preparación para Supabase.")
     st.markdown("- **DCD 1.0.1:** Pantalla de recordatorio, correo automático opcional, usuarios configurables, auditoría y revisión de mapeo.")
     st.markdown("- **DCD 1.0.2:** Ajuste de áreas: Hospital, Atención Familiar y Comunitaria, y retirada de Otras Unidades Docentes.")
     st.markdown("- **DCD 1.0.3:** Cierre estable: exportación más completa, estado finalizado y bloqueo suave de edición.")
     st.markdown("- **DCD 1.0.4:** Totales en Matriz_DCD y panel administrador para Excel consolidado desde Supabase.")
-    st.markdown("- **DCD 1.0.5:** Usuarios por unidad docente, contraseñas hasheadas, reset por admin y borradores filtrados.")
-    st.markdown("- **DCD 1.0.5.1:** Corrección del selector de unidad docente al crear usuarios.")
+    st.markdown("- **DCD 1.0.5:** Usuarios por centro docente, contraseñas hasheadas, reset por admin y borradores filtrados.")
+    st.markdown("- **DCD 1.0.5.1:** Corrección del selector de centro docente al crear usuarios.")
+    st.markdown("- **DCD 1.0.6:** Guardado versionado, control de centros pendientes y cambio visible a Centros Docentes.")
 
 
 def page_change_password() -> None:
@@ -1076,12 +1235,12 @@ def page_instrucciones() -> None:
         """
         **Bienvenido al aplicativo DATOS CAPACIDAD DOCENTE (DCD 1.0).**
 
-        Este aplicativo tiene como finalidad recoger datos de capacidad docente por unidad docente, nivel de estudios,
+        Este aplicativo tiene como finalidad recoger datos de capacidad docente por centro docente, nivel de estudios,
         rama y titulación.
 
         **Instrucciones básicas:**
 
-        1. Seleccione primero el área y la unidad docente correspondiente.
+        1. Seleccione primero el área y el centro docente correspondiente.
         2. Revise y confirme los datos de la unidad seleccionada.
         3. Introduzca los datos mediante los selectores encadenados:
            **Nivel Estudio I → Nivel Estudio II → Rama → Titulación**.
@@ -1112,21 +1271,21 @@ def page_instrucciones() -> None:
 
 
 def page_seleccion_unidad() -> None:
-    st.header("Paso 2: Selección de Área y Unidad Docente")
+    st.header("Paso 2: Selección de Área y Centro Docente")
 
     st.session_state.area_selected = normalizar_area(st.session_state.area_selected)
 
     if not is_admin() and user_scope_unidad():
         st.session_state.area_selected = st.session_state.get("current_user_area", "")
         st.session_state.direccion_selected = user_scope_unidad()
-        st.session_state.codigo_borrador = build_codigo_borrador(st.session_state.direccion_selected)
-        st.info("Su usuario está vinculado a esta unidad docente. Solo podrá crear, cargar y modificar borradores de esta unidad.")
+        st.session_state.codigo_expediente = build_codigo_borrador(st.session_state.direccion_selected)
+        st.info("Su usuario está vinculado a este centro docente. Solo podrá crear, cargar y modificar borradores de este centro.")
         st.markdown(f"**Área asignada:** {st.session_state.area_selected}")
-        st.markdown(f"**Unidad docente asignada:** {st.session_state.direccion_selected}")
+        st.markdown(f"**Centro docente asignado:** {st.session_state.direccion_selected}")
 
         col_next, col_back = st.columns(2)
         with col_next:
-            if st.button("Continuar con mi unidad docente"):
+            if st.button("Continuar con mi centro docente"):
                 st.session_state.current_step = 3
                 st.rerun()
         with col_back:
@@ -1153,7 +1312,7 @@ def page_seleccion_unidad() -> None:
                     else:
                         st.warning("Debe seleccionar un código de borrador.")
             else:
-                st.info("No se encontraron borradores guardados de su unidad docente.")
+                st.info("No se encontraron borradores guardados de su centro docente.")
         else:
             st.info("Supabase no está configurado. No se pueden cargar borradores guardados.")
         return
@@ -1169,7 +1328,7 @@ def page_seleccion_unidad() -> None:
         st.session_state.direccion_selected = ""
 
     st.session_state.direccion_selected = st.selectbox(
-        "**SELECCIONE UNIDAD DOCENTE / DIRECCIÓN / GERENCIA**",
+        "**SELECCIONE CENTRO DOCENTE / DIRECCIÓN / GERENCIA**",
         options=[""] + direccion_options,
         index=([""] + direccion_options).index(st.session_state.direccion_selected) if st.session_state.direccion_selected in ([""] + direccion_options) else 0,
     )
@@ -1179,17 +1338,19 @@ def page_seleccion_unidad() -> None:
         if st.button("Siguiente"):
             if st.session_state.area_selected and st.session_state.direccion_selected:
                 nuevo_codigo = build_codigo_borrador(st.session_state.direccion_selected)
-                if st.session_state.codigo_borrador and st.session_state.codigo_borrador != nuevo_codigo:
+                if st.session_state.codigo_expediente and st.session_state.codigo_expediente != nuevo_codigo:
                     st.session_state.registros = {}
                     st.session_state.observaciones = ""
                     st.session_state.draft_estado = "borrador"
                     st.session_state.permitir_editar_finalizado = False
                     reset_selectores_estudio()
-                st.session_state.codigo_borrador = nuevo_codigo
+                st.session_state.codigo_expediente = nuevo_codigo
+                st.session_state.codigo_borrador = ""
+                st.session_state.version_num = 0
                 st.session_state.current_step = 3
                 st.rerun()
             else:
-                st.warning("Debe seleccionar un área y una unidad docente para continuar.")
+                st.warning("Debe seleccionar un área y un centro docente para continuar.")
     with col2:
         if st.button("ATRÁS"):
             st.session_state.current_step = 1
@@ -1226,27 +1387,29 @@ def page_confirmacion() -> None:
     columna_excel = COLUMNA_EXCEL_POR_DIRECCION.get(unidad, "")
 
     st.markdown(f"**Área:** <span style='color:#198754'>{st.session_state.area_selected}</span>", unsafe_allow_html=True)
-    st.markdown(f"**Unidad docente:** <span style='color:#0d6efd'>{unidad}</span>", unsafe_allow_html=True)
-    st.markdown(f"**Código borrador:** `{st.session_state.codigo_borrador or build_codigo_borrador(unidad)}`")
+    st.markdown(f"**Centro docente:** <span style='color:#0d6efd'>{unidad}</span>", unsafe_allow_html=True)
+    st.markdown(f"**Expediente base:** `{st.session_state.codigo_expediente or build_codigo_borrador(unidad)}`")
+    if st.session_state.codigo_borrador:
+        st.markdown(f"**Versión cargada:** `{st.session_state.codigo_borrador}`")
 
     if columna_excel:
-        st.success(f"La unidad seleccionada se corresponde con la columna del Excel: **{columna_excel}**")
+        st.success(f"El centro seleccionado se corresponde con la columna del Excel: **{columna_excel}**")
     else:
         st.warning(
-            "Esta unidad no tiene una columna directa identificada en el Excel base. "
+            "Este centro no tiene una columna directa identificada en el Excel base. "
             "Se podrán guardar registros y generar hoja de registros, pero quizá haya que revisar el mapeo para la matriz final."
         )
 
-    with st.expander("Revisión del mapeo unidad docente ↔ columna Excel"):
+    with st.expander("Revisión del mapeo centro docente ↔ columna Excel"):
         mapping_rows = []
         for direccion, codigo in CODIGOS_DIRECCION.items():
             mapping_rows.append({
-                "Unidad docente": direccion,
+                "Centro docente": direccion,
                 "Código interno": codigo,
                 "Columna Excel": COLUMNA_EXCEL_POR_DIRECCION.get(direccion, "PENDIENTE DE MAPEAR"),
             })
         st.dataframe(pd.DataFrame(mapping_rows), use_container_width=True, hide_index=True)
-        st.caption("Esta tabla permite revisar qué unidades vuelcan datos directamente en la matriz Excel y cuáles quedan pendientes de correspondencia definitiva.")
+        st.caption("Esta tabla permite revisar qué centros vuelcan datos directamente en la matriz Excel y cuáles quedan pendientes de correspondencia definitiva.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1264,8 +1427,10 @@ def page_entrada_datos() -> None:
     catalogo = load_catalogo()
     expediente_finalizado = st.session_state.get("draft_estado") == "finalizado"
 
-    st.write(f"Unidad docente seleccionada: **{st.session_state.direccion_selected}**")
-    st.write(f"Código de borrador: `{st.session_state.codigo_borrador or build_codigo_borrador(st.session_state.direccion_selected)}`")
+    st.write(f"Centro docente seleccionado: **{st.session_state.direccion_selected}**")
+    st.write(f"Expediente base: `{st.session_state.codigo_expediente or build_codigo_borrador(st.session_state.direccion_selected)}`")
+    if st.session_state.codigo_borrador:
+        st.write(f"Versión cargada: `{st.session_state.codigo_borrador}`")
     st.write(f"Estado actual: **{st.session_state.get('draft_estado', 'borrador').upper()}**")
 
     if expediente_finalizado:
@@ -1456,21 +1621,21 @@ def page_resumen_descarga() -> None:
     st.markdown("---")
     st.subheader("Recordatorio antes de finalizar")
     st.warning(
-        "Antes de cerrar el expediente, revise que la unidad docente, la titulación y el número de alumnos son correctos. "
+        "Antes de cerrar el expediente, revise que el centro docente, la titulación y el número de alumnos son correctos. "
         "Si falta alguna titulación o está esperando datos de alguna especialidad, use 'REVISAR / VOLVER' o 'Guardar borrador'."
     )
 
     unidad = st.session_state.direccion_selected
     columna_excel = COLUMNA_EXCEL_POR_DIRECCION.get(unidad, "")
     if columna_excel:
-        st.info(f"Los datos de esta unidad se volcarán en la columna del Excel: **{columna_excel}**.")
+        st.info(f"Los datos de este centro se volcarán en la columna del Excel: **{columna_excel}**.")
     else:
         st.error(
-            "Esta unidad no tiene columna Excel mapeada. Se generará el Excel con la hoja de registros, "
+            "Este centro no tiene columna Excel mapeada. Se generará el Excel con la hoja de registros, "
             "pero la matriz principal puede no quedar volcada en una columna específica."
         )
 
-    check1 = st.checkbox("He revisado que el Área y la Unidad Docente son correctas", key="check_recordatorio_unidad")
+    check1 = st.checkbox("He revisado que el Área y el Centro Docente son correctos", key="check_recordatorio_unidad")
     check2 = st.checkbox("He revisado que las titulaciones y el número de alumnos son correctos", key="check_recordatorio_datos")
     check3 = st.checkbox("Entiendo que debo descargar el Excel y/o enviarlo por correo según el procedimiento indicado", key="check_recordatorio_envio")
 
@@ -1520,13 +1685,15 @@ def page_resumen_descarga() -> None:
                 ok_save, msg_save = save_draft_to_supabase(estado="finalizado")
                 if ok_save:
                     st.success(msg_save)
+                    excel_bytes = build_output_excel()
+                    filename = f"{st.session_state.codigo_borrador}.xlsx"
+                    ok_mail, msg_mail = send_email_with_mailgun(excel_bytes, filename)
+                    if ok_mail:
+                        st.success(msg_mail)
+                    else:
+                        st.warning(msg_mail)
                 else:
                     st.warning(msg_save)
-                ok_mail, msg_mail = send_email_with_mailgun(excel_bytes, filename)
-                if ok_mail:
-                    st.success(msg_mail)
-                else:
-                    st.warning(msg_mail)
 
     st.markdown("---")
     st.caption("Si Mailgun no está configurado, el botón de correo mostrará un aviso y podrá seguir usando la descarga manual.")
@@ -1540,7 +1707,7 @@ def render_admin_consolidado() -> None:
         Esta pantalla genera un Excel consolidado a partir de los expedientes guardados como **finalizado** en Supabase.
 
         Criterio aplicado:
-        - Se toma el último expediente finalizado por cada unidad docente.
+        - Se toma el último expediente finalizado por cada centro docente.
         - Si dos unidades vuelcan en la misma columna, sus registros se suman en la matriz.
         - Las columnas de totales se calculan automáticamente:
           H = E+F+G, K = H+I+J, O = L+M+N, S = O+P+Q+R y T = K+S.
@@ -1552,18 +1719,38 @@ def render_admin_consolidado() -> None:
         return
 
     borradores, duplicados = get_latest_finalized_drafts()
-    col1, col2 = st.columns(2)
+    status_df, missing_centros = get_admin_centros_status()
+    col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Expedientes finalizados usados", len(borradores))
     with col2:
         st.metric("Duplicados finalizados ignorados", len(duplicados))
+    with col3:
+        st.metric("Centros pendientes", len(missing_centros))
+
+    st.subheader("Estado de centros docentes")
+    st.dataframe(status_df, use_container_width=True, hide_index=True)
+
+    if missing_centros:
+        st.warning("Hay centros docentes pendientes de incorporarse al consolidado.")
+        with st.expander("Ver centros pendientes"):
+            for centro in missing_centros:
+                st.write(f"- {centro}")
+        if st.button("Enviar aviso de centros pendientes por correo"):
+            ok, msg = send_missing_centros_email(missing_centros, status_df)
+            if ok:
+                st.success(msg)
+            else:
+                st.warning(msg)
+    else:
+        st.success("Todos los centros docentes previstos tienen expediente finalizado.")
 
     if borradores:
         preview = pd.DataFrame([{
             "Código borrador": b.get("codigo_borrador", ""),
             "Área": normalizar_area(b.get("area", "")),
-            "Unidad docente": b.get("unidad_docente", ""),
-            "Actualizado": b.get("updated_at", ""),
+            "Centro docente": b.get("unidad_docente", ""),
+            "Guardado": b.get("saved_at") or b.get("updated_at", ""),
             "Columna Excel": COLUMNA_EXCEL_POR_DIRECCION.get(b.get("unidad_docente", ""), ""),
         } for b in borradores])
         st.subheader("Expedientes que entrarán en el consolidado")
@@ -1576,8 +1763,8 @@ def render_admin_consolidado() -> None:
             st.dataframe(pd.DataFrame([{
                 "Código borrador ignorado": b.get("codigo_borrador", ""),
                 "Área": normalizar_area(b.get("area", "")),
-                "Unidad docente": b.get("unidad_docente", ""),
-                "Actualizado": b.get("updated_at", ""),
+                "Centro docente": b.get("unidad_docente", ""),
+                "Guardado": b.get("saved_at") or b.get("updated_at", ""),
             } for b in duplicados]), use_container_width=True, hide_index=True)
 
     st.markdown("---")
@@ -1619,9 +1806,9 @@ def render_admin_usuarios() -> None:
     if role != "admin":
         area = st.selectbox("Área asignada", options=[""] + AREA_OPTIONS, key="admin_user_area")
         direccion_options = DIRECCIONES_POR_AREA.get(area, [])
-        unidad_docente = st.selectbox("Unidad docente asignada", options=[""] + direccion_options, key="admin_user_unidad")
+        unidad_docente = st.selectbox("Centro docente asignado", options=[""] + direccion_options, key="admin_user_unidad")
     else:
-        st.info("Los usuarios administradores no quedan vinculados a una unidad docente concreta.")
+        st.info("Los usuarios administradores no quedan vinculados a un centro docente concreto.")
 
     with st.form("form_usuario"):
         username = st.text_input("Usuario", placeholder="chuimi")

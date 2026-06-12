@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.5.1)
+# DATOS CAPACIDAD DOCENTE (DCD 1.0.6)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -8,16 +8,20 @@ Esta versión parte de la DCD 1.0 y añade:
 - Envío automático opcional por Mailgun.
 - Control básico/avanzado de usuarios mediante `USERS_JSON`.
 - Auditoría de acciones en Supabase.
-- Revisión visible del mapeo entre unidades docentes y columnas del Excel.
+- Revisión visible del mapeo entre centros docentes y columnas del Excel.
 - Ajuste del campo Área: `HOSPITAL`, `ATENCION FAMILIAR Y COMUNITARIA` y retirada de `OTRAS UNIDADES DOCENTES`.
 - Exportación Excel más completa, con estado, usuario, observaciones y datos generales en las hojas de salida.
 - Control de estado `borrador` / `finalizado` con bloqueo suave de edición para expedientes finalizados.
 - Totales automáticos en la hoja `Matriz_DCD`, incluida la fila total final.
 - Panel administrador para generar un Excel consolidado desde los expedientes finalizados guardados en Supabase.
 - Gestión de usuarios en Supabase con contraseñas hasheadas.
-- Usuarios vinculados a una unidad docente y borradores filtrados por unidad.
+- Usuarios vinculados a un centro docente y borradores filtrados por centro.
 - Reset de contraseña por administrador, sin visualizar contraseñas antiguas.
-- Corrección del selector de unidad docente en el panel de creación/actualización de usuarios.
+- Corrección del selector de centro docente en el panel de creación/actualización de usuarios.
+- Guardado versionado: cada guardado crea una nueva versión y no sobrescribe la anterior.
+- Panel administrador con estado de centros finalizados, pendientes y sin datos.
+- Aviso por correo de centros pendientes, si Mailgun está configurado.
+- Cambio visible de `Unidad Docente` a `Centro Docente`.
 
 ## 1. Estructura del proyecto
 
@@ -92,7 +96,7 @@ Puedes añadir varios usuarios en los secretos:
 USERS_JSON = '{"admin":{"password":"Capacidad2026","role":"admin","display_name":"Administrador"},"chuimi":{"password":"ClaveCHUIMI","role":"usuario","display_name":"CHUIMI"}}'
 ```
 
-De momento el control de usuarios sirve para identificar quién entra y para auditoría. En una versión posterior se puede limitar cada usuario a una unidad docente concreta.
+El control de usuarios permite vincular cada usuario a un centro docente concreto y filtrar sus borradores por ese centro.
 
 ## 5. Supabase
 
@@ -110,7 +114,7 @@ supabase/schema.sql
 
 y ejecuta `Run`.
 
-Si ya habías creado las tablas de DCD 1.0, este SQL añade la tabla nueva de auditoría sin borrar los datos existentes.
+Si ya habías creado las tablas de versiones anteriores, este SQL añade las columnas necesarias para usuarios, versionado de borradores y control de centros pendientes sin borrar los datos existentes.
 
 ## 6. Mailgun opcional
 
@@ -133,7 +137,7 @@ Comandos habituales:
 
 ```bash
 git add .
-git commit -m "Actualizar DCD 1.0.5.1"
+git commit -m "Actualizar DCD 1.0.6"
 git push
 ```
 
@@ -153,7 +157,7 @@ Después de cambiar secretos, haz siempre reboot/restart de la app para que Stre
 
 1. Login.
 2. Aceptación de instrucciones.
-3. Selección de área y unidad docente.
+3. Selección de área y centro docente.
 4. Confirmación y revisión de mapeo Excel.
 5. Entrada de datos por selectores dependientes.
 6. Guardado de borrador.
