@@ -36,7 +36,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.1.1"
+APP_VERSION = "DCD 1.1.2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -1287,6 +1287,191 @@ def build_current_analytics_from_supabase() -> tuple[bool, str, dict[str, pd.Dat
         return False, f"Error al generar analítica: {exc}", None
 
 
+
+# =========================================================
+# CALIDAD DE DATOS / VALIDACIONES
+# =========================================================
+def build_current_dataset_from_supabase() -> tuple[bool, str, pd.DataFrame | None, pd.DataFrame | None, pd.DataFrame | None, list[dict], list[dict]]:
+    """Construye la matriz y registros consolidados con la última versión finalizada por centro."""
+    client = get_supabase_client()
+    if client is None:
+        return False, "Supabase no está configurado.", None, None, None, [], []
+    try:
+        borradores, duplicados = get_latest_finalized_drafts()
+        status_df, _missing = get_admin_centros_status()
+        if not borradores:
+            return False, "No hay expedientes finalizados.", None, pd.DataFrame(), status_df, [], duplicados
+
+        matriz = limpiar_columnas_matriz(load_catalogo())
+        registros_consolidados = []
+
+        for borrador in borradores:
+            codigo = borrador.get("codigo_borrador", "")
+            unidad = borrador.get("unidad_docente", "")
+            columna_excel = COLUMNA_EXCEL_POR_DIRECCION.get(unidad, "")
+            if not codigo:
+                continue
+            resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo).execute()
+            rows = getattr(resp, "data", []) or []
+            for row in rows:
+                item = {
+                    "Nivel Estudio I": row.get("nivel_i", ""),
+                    "Nivel Estudio II": row.get("nivel_ii", ""),
+                    "Rama": row.get("rama", ""),
+                    "Titulación": row.get("titulacion", ""),
+                    "Nº alumnos": int(row.get("numero_alumnos") or 0),
+                }
+                volcar_registro_en_matriz(matriz, item, columna_excel)
+                registros_consolidados.append({
+                    "Código borrador": codigo,
+                    "Estado": borrador.get("estado", ""),
+                    "Fecha guardado": borrador.get("saved_at") or borrador.get("updated_at", ""),
+                    "Área": normalizar_area(borrador.get("area", "")),
+                    "Centro docente": unidad,
+                    "Columna Excel": columna_excel,
+                    **item,
+                })
+
+        registros_df = pd.DataFrame(registros_consolidados)
+        return True, "Dataset generado.", matriz, registros_df, status_df, borradores, duplicados
+    except Exception as exc:
+        return False, f"Error al construir dataset de calidad: {exc}", None, None, None, [], []
+
+
+def build_quality_tables(matriz: pd.DataFrame, registros_df: pd.DataFrame, status_df: pd.DataFrame, duplicados: list[dict] | None = None) -> dict[str, pd.DataFrame]:
+    """Genera tablas de calidad de datos para revisión administrativa."""
+    duplicados = duplicados or []
+    if matriz is None or matriz.empty:
+        matriz_calc = pd.DataFrame()
+    else:
+        matriz_calc = matriz_sin_total(matriz)
+        for col in MATRIX_VALUE_COLUMNS:
+            if col in matriz_calc.columns:
+                matriz_calc[col] = pd.to_numeric(matriz_calc[col], errors="coerce").fillna(0).astype(int)
+
+    if registros_df is None:
+        registros_df = pd.DataFrame()
+    if status_df is None:
+        status_df = pd.DataFrame()
+
+    pendientes = pd.DataFrame()
+    if not status_df.empty and "Estado" in status_df.columns:
+        pendientes = status_df[~status_df["Estado"].astype(str).str.startswith("Finalizado")].copy()
+
+    borrador_posterior = pd.DataFrame()
+    if not status_df.empty and "Estado" in status_df.columns:
+        borrador_posterior = status_df[status_df["Estado"].astype(str).str.contains("borrador posterior", case=False, na=False)].copy()
+
+    duplicados_titulacion = pd.DataFrame(columns=["Centro docente", *KEY_COLUMNS, "Nº líneas", "Total alumnos"])
+    if not registros_df.empty and all(c in registros_df.columns for c in ["Centro docente", *KEY_COLUMNS, "Nº alumnos"]):
+        duplicados_titulacion = (
+            registros_df.groupby(["Centro docente", *KEY_COLUMNS], dropna=False)
+            .agg(**{"Nº líneas": ("Nº alumnos", "size"), "Total alumnos": ("Nº alumnos", "sum")})
+            .reset_index()
+        )
+        duplicados_titulacion = duplicados_titulacion[duplicados_titulacion["Nº líneas"] > 1].sort_values(["Centro docente", "Nº líneas"], ascending=[True, False])
+
+    valores_altos = pd.DataFrame(columns=list(registros_df.columns) + ["Motivo alerta"] if not registros_df.empty else ["Motivo alerta"])
+    if not registros_df.empty and "Nº alumnos" in registros_df.columns:
+        tmp = registros_df.copy()
+        tmp["Nº alumnos"] = pd.to_numeric(tmp["Nº alumnos"], errors="coerce").fillna(0).astype(int)
+        positivos = tmp[tmp["Nº alumnos"] > 0]
+        p95 = int(positivos["Nº alumnos"].quantile(0.95)) if not positivos.empty else 0
+        threshold = max(100, p95 * 2) if p95 else 100
+        valores_altos = tmp[tmp["Nº alumnos"] >= threshold].copy()
+        if not valores_altos.empty:
+            valores_altos["Motivo alerta"] = f"Nº alumnos >= {threshold}. Revisar si es correcto."
+
+    titulaciones_sin_plazas = pd.DataFrame(columns=KEY_COLUMNS + ["Total plazas"])
+    if not matriz_calc.empty and all(c in matriz_calc.columns for c in KEY_COLUMNS + ["Total"]):
+        titulaciones_sin_plazas = matriz_calc[matriz_calc["Total"] == 0][KEY_COLUMNS + ["Total"]].copy()
+        titulaciones_sin_plazas = titulaciones_sin_plazas.rename(columns={"Total": "Total plazas"}).head(500)
+
+    centros_finalizados_sin_registros = pd.DataFrame(columns=["Centro docente", "Estado", "Último finalizado"])
+    if not status_df.empty and not registros_df.empty and "Centro docente" in registros_df.columns:
+        centros_con_registros = set(registros_df["Centro docente"].dropna().astype(str).unique().tolist())
+        if "Centro docente" in status_df.columns and "Estado" in status_df.columns:
+            centros_finalizados_sin_registros = status_df[
+                status_df["Estado"].astype(str).str.startswith("Finalizado")
+                & ~status_df["Centro docente"].astype(str).isin(centros_con_registros)
+            ].copy()
+    elif not status_df.empty and registros_df.empty and "Estado" in status_df.columns:
+        centros_finalizados_sin_registros = status_df[status_df["Estado"].astype(str).str.startswith("Finalizado")].copy()
+
+    resumen = pd.DataFrame([
+        {"Control": "Centros pendientes/sin finalizar", "Resultado": len(pendientes), "Nivel": "Aviso" if len(pendientes) else "OK"},
+        {"Control": "Centros finalizados con borrador posterior", "Resultado": len(borrador_posterior), "Nivel": "Aviso" if len(borrador_posterior) else "OK"},
+        {"Control": "Centros finalizados sin registros", "Resultado": len(centros_finalizados_sin_registros), "Nivel": "Alerta" if len(centros_finalizados_sin_registros) else "OK"},
+        {"Control": "Titulaciones duplicadas dentro del mismo centro", "Resultado": len(duplicados_titulacion), "Nivel": "Revisar" if len(duplicados_titulacion) else "OK"},
+        {"Control": "Registros con valores altos", "Resultado": len(valores_altos), "Nivel": "Revisar" if len(valores_altos) else "OK"},
+        {"Control": "Titulaciones del catálogo sin plazas", "Resultado": len(titulaciones_sin_plazas), "Nivel": "Informativo"},
+        {"Control": "Expedientes finalizados duplicados ignorados", "Resultado": len(duplicados), "Nivel": "Aviso" if len(duplicados) else "OK"},
+    ])
+
+    return {
+        "Calidad_Resumen": resumen,
+        "Calidad_Pendientes": pendientes,
+        "Calidad_Borrador_Posterior": borrador_posterior,
+        "Calidad_Finalizados_0reg": centros_finalizados_sin_registros,
+        "Calidad_Duplicados": duplicados_titulacion,
+        "Calidad_Valores_Altos": valores_altos,
+        "Calidad_Sin_Plazas": titulaciones_sin_plazas,
+    }
+
+
+def build_quality_from_supabase() -> tuple[bool, str, dict[str, pd.DataFrame] | None]:
+    ok, msg, matriz, registros_df, status_df, _borradores, duplicados = build_current_dataset_from_supabase()
+    if not ok or matriz is None or registros_df is None or status_df is None:
+        return False, msg, None
+    return True, "Validaciones de calidad generadas.", build_quality_tables(matriz, registros_df, status_df, duplicados)
+
+
+def compare_latest_publications() -> tuple[bool, str, dict[str, pd.DataFrame] | None]:
+    pubs = get_publicaciones()
+    if len(pubs) < 2:
+        return False, "No hay al menos dos publicaciones para comparar.", None
+    pub_actual, pub_anterior = pubs[0], pubs[1]
+    try:
+        ok1, data1, msg1 = download_publication_file(pub_actual.get("ruta_excel", ""))
+        ok2, data2, msg2 = download_publication_file(pub_anterior.get("ruta_excel", ""))
+        if not ok1 or not ok2 or not data1 or not data2:
+            return False, f"No se pudieron descargar ambas publicaciones. Actual: {msg1}. Anterior: {msg2}", None
+        x1 = pd.ExcelFile(io.BytesIO(data1))
+        x2 = pd.ExcelFile(io.BytesIO(data2))
+        if "Matriz_DCD" not in x1.sheet_names or "Matriz_DCD" not in x2.sheet_names:
+            return False, "Alguna publicación no contiene hoja Matriz_DCD.", None
+        m1 = pd.read_excel(x1, sheet_name="Matriz_DCD")
+        m2 = pd.read_excel(x2, sheet_name="Matriz_DCD")
+        m1 = matriz_sin_total(m1)
+        m2 = matriz_sin_total(m2)
+        for df in (m1, m2):
+            if "Total" in df.columns:
+                df["Total"] = pd.to_numeric(df["Total"], errors="coerce").fillna(0).astype(int)
+        cols = [c for c in KEY_COLUMNS if c in m1.columns and c in m2.columns]
+        if not cols or "Total" not in m1.columns or "Total" not in m2.columns:
+            return False, "No se pudieron localizar columnas clave o Total para comparar.", None
+        a = m1[cols + ["Total"]].rename(columns={"Total": "Total actual"})
+        b = m2[cols + ["Total"]].rename(columns={"Total": "Total anterior"})
+        comp = a.merge(b, on=cols, how="outer").fillna(0)
+        comp["Total actual"] = pd.to_numeric(comp["Total actual"], errors="coerce").fillna(0).astype(int)
+        comp["Total anterior"] = pd.to_numeric(comp["Total anterior"], errors="coerce").fillna(0).astype(int)
+        comp["Diferencia"] = comp["Total actual"] - comp["Total anterior"]
+        cambios = comp[comp["Diferencia"] != 0].copy().sort_values("Diferencia", key=lambda s: s.abs(), ascending=False)
+        resumen = pd.DataFrame([
+            {"Indicador": "Publicación actual", "Valor": pub_actual.get("codigo_publicacion", "")},
+            {"Indicador": "Publicación anterior", "Valor": pub_anterior.get("codigo_publicacion", "")},
+            {"Indicador": "Total actual", "Valor": int(comp["Total actual"].sum())},
+            {"Indicador": "Total anterior", "Valor": int(comp["Total anterior"].sum())},
+            {"Indicador": "Diferencia total", "Valor": int(comp["Diferencia"].sum())},
+            {"Indicador": "Titulaciones con cambios", "Valor": int(len(cambios))},
+        ])
+        return True, "Comparativa generada.", {
+            "Comparativa_Resumen": resumen,
+            "Comparativa_Cambios": cambios.head(200),
+        }
+    except Exception as exc:
+        return False, f"Error al comparar publicaciones: {exc}", None
+
 def render_streamlit_dashboard(analytics: dict[str, pd.DataFrame]) -> None:
     global_df = analytics.get("Resumen_Global", pd.DataFrame())
     values = dict(zip(global_df.get("Indicador", []), global_df.get("Valor", []))) if not global_df.empty else {}
@@ -1385,6 +1570,12 @@ def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[
         add_pdf_table(story, "Top centros docentes / columnas", analytics.get("Resumen_Centro", pd.DataFrame()), styles, max_rows=15)
         add_pdf_table(story, "Top ramas", analytics.get("Resumen_Rama", pd.DataFrame()), styles, max_rows=15)
         add_pdf_table(story, "Top titulaciones", analytics.get("Top_Titulaciones", pd.DataFrame()), styles, max_rows=15)
+        if "Calidad_Resumen" in analytics:
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Validaciones de calidad de datos", styles["Heading1"]))
+            add_pdf_table(story, "Resumen de controles", analytics.get("Calidad_Resumen", pd.DataFrame()), styles, max_rows=20)
+            add_pdf_table(story, "Registros con valores altos", analytics.get("Calidad_Valores_Altos", pd.DataFrame()), styles, max_rows=15)
+            add_pdf_table(story, "Duplicados por centro/titulación", analytics.get("Calidad_Duplicados", pd.DataFrame()), styles, max_rows=15)
         story.append(Paragraph("Matriz DCD completa", styles["Heading1"]))
 
     df = matriz_pdf.copy().fillna("")
@@ -1465,6 +1656,9 @@ def build_publication_package() -> tuple[bool, str, dict | None]:
             })
 
     analytics = build_analytics_tables(matriz, status_df)
+    registros_df = pd.DataFrame(registros_consolidados)
+    quality_tables = build_quality_tables(matriz, registros_df, status_df, duplicados)
+    analytics.update(quality_tables)
 
     ok_xlsx, msg_xlsx, excel_bytes, excel_filename = build_consolidated_excel_from_supabase()
     if not ok_xlsx or not excel_bytes:
@@ -2129,6 +2323,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
             duplicados_df = pd.DataFrame(columns=["Código borrador ignorado", "Área", "Centro docente", "Actualizado"])
 
         analytics = build_analytics_tables(matriz, status_df)
+        quality_tables = build_quality_tables(matriz, registros_df, status_df, duplicados)
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -2144,6 +2339,11 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
                 "Resumen_Centro_Rama": analytics["Resumen_Centro_Rama"],
                 "Resumen_Centro_Nivel": analytics["Resumen_Centro_Nivel"],
                 "Top_Titulaciones": analytics["Top_Titulaciones"],
+                "Calidad_Resumen": quality_tables["Calidad_Resumen"],
+                "Calidad_Pendientes": quality_tables["Calidad_Pendientes"],
+                "Calidad_Duplicados": quality_tables["Calidad_Duplicados"],
+                "Calidad_Valores_Altos": quality_tables["Calidad_Valores_Altos"],
+                "Calidad_Sin_Plazas": quality_tables["Calidad_Sin_Plazas"],
                 "Estado_centros": status_df,
                 "Borradores_usados": borradores_df,
                 "Registros_DCD": registros_df,
@@ -2309,8 +2509,9 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.9:** Portal externo de consulta de publicación vigente con dashboard y descargas limitadas.")
     st.markdown("- **DCD 1.1.0:** Mejora visual del dashboard, tarjetas compactas y PDF preparado para logo/frase institucional.")
     st.markdown("- **DCD 1.1.1:** Auditoría ampliada, registro de accesos/descargas y backup completo admin.")
-    st.markdown("- **DCD 1.1.1.1:** Corrección de políticas RLS de auditoría y diagnóstico manual de eventos.")
     st.markdown("- **DCD 1.0.9.1:** Ajustes de interfaz del portal y mantenimiento avanzado de usuarios.")
+    st.markdown("- **DCD 1.1.1.1:** Corrección de políticas RLS de auditoría y diagnóstico manual de eventos.")
+    st.markdown("- **DCD 1.1.2:** Calidad de datos: avisos, validaciones, valores atípicos y comparativa entre publicaciones.")
 
 
 def page_change_password() -> None:
@@ -2718,6 +2919,26 @@ def page_resumen_descarga() -> None:
         st.metric("Estado actual", st.session_state.get("draft_estado", "borrador").upper())
     with col_total:
         st.metric("Total alumnos introducidos", total_alumnos)
+
+    # Control preventivo de calidad antes de finalizar. No bloquea, pero avisa de situaciones a revisar.
+    st.markdown("### Revisión automática de calidad")
+    quality_warnings = []
+    if total_alumnos == 0:
+        quality_warnings.append("El expediente tiene total de alumnos igual a 0.")
+    if all(c in df.columns for c in KEY_COLUMNS):
+        dup_count = int(df.duplicated(subset=KEY_COLUMNS, keep=False).sum())
+        if dup_count:
+            quality_warnings.append(f"Hay {dup_count} líneas con titulaciones repetidas dentro del mismo expediente.")
+    if "Nº alumnos" in df.columns and not df.empty:
+        max_val = int(pd.to_numeric(df["Nº alumnos"], errors="coerce").fillna(0).max())
+        if max_val >= 100:
+            quality_warnings.append(f"Existe al menos un registro con {max_val} alumnos. Revise si es correcto.")
+    if quality_warnings:
+        for warning in quality_warnings:
+            st.warning(warning)
+        st.caption("Estos avisos no impiden finalizar, pero ayudan a detectar posibles errores antes del cierre.")
+    else:
+        st.success("No se han detectado avisos básicos de calidad en este expediente.")
 
     st.markdown("---")
     st.subheader("Recordatorio antes de finalizar")
@@ -3340,6 +3561,69 @@ def page_portal_externo() -> None:
         st.session_state[audit_key] = True
 
 
+
+def render_admin_calidad_datos() -> None:
+    st.subheader("Calidad de datos")
+    st.info(
+        "Esta pantalla no valida el contenido material declarado por cada centro, pero ayuda a detectar situaciones que conviene revisar: "
+        "centros pendientes, expedientes finalizados sin registros, duplicados, valores altos y cambios entre publicaciones."
+    )
+
+    if not supabase_available():
+        st.warning("Supabase no está configurado. No se pueden generar validaciones de calidad.")
+        return
+
+    ok, msg, quality = build_quality_from_supabase()
+    if not ok or not quality:
+        st.warning(msg)
+        return
+
+    resumen = quality.get("Calidad_Resumen", pd.DataFrame())
+    if not resumen.empty:
+        alertas = int((resumen["Nivel"].astype(str).isin(["Alerta", "Revisar", "Aviso"])).sum()) if "Nivel" in resumen.columns else 0
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Controles ejecutados", len(resumen))
+        c2.metric("Controles con aviso/revisión", alertas)
+        c3.metric("Titulaciones sin plazas", int(resumen.loc[resumen["Control"] == "Titulaciones del catálogo sin plazas", "Resultado"].iloc[0]) if "Control" in resumen.columns and (resumen["Control"] == "Titulaciones del catálogo sin plazas").any() else 0)
+        st.dataframe(resumen, use_container_width=True, hide_index=True)
+
+    tabs = st.tabs(["Pendientes", "Borrador posterior", "Finalizados 0 registros", "Duplicados", "Valores altos", "Sin plazas", "Comparativa publicaciones"])
+    tab_names = [
+        "Calidad_Pendientes",
+        "Calidad_Borrador_Posterior",
+        "Calidad_Finalizados_0reg",
+        "Calidad_Duplicados",
+        "Calidad_Valores_Altos",
+        "Calidad_Sin_Plazas",
+    ]
+    for tab, sheet in zip(tabs[:6], tab_names):
+        with tab:
+            df = quality.get(sheet, pd.DataFrame())
+            if df is None or df.empty:
+                st.success("Sin incidencias para este control.")
+            else:
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.caption(f"{len(df)} filas encontradas.")
+
+    with tabs[6]:
+        ok_comp, msg_comp, comp = compare_latest_publications()
+        if not ok_comp or not comp:
+            st.info(msg_comp)
+        else:
+            st.markdown("#### Resumen comparativo")
+            st.dataframe(comp.get("Comparativa_Resumen", pd.DataFrame()), use_container_width=True, hide_index=True)
+            st.markdown("#### Cambios por titulación")
+            cambios = comp.get("Comparativa_Cambios", pd.DataFrame())
+            if cambios.empty:
+                st.success("No se detectan cambios entre las dos últimas publicaciones.")
+            else:
+                st.dataframe(cambios, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    if st.button("Registrar revisión de calidad"):
+        audit_event("revision_calidad_datos", "Revisión manual de calidad ejecutada desde panel admin")
+        st.success("Revisión registrada en auditoría.")
+
 def page_admin_consolidado() -> None:
     st.header("Panel administrador")
 
@@ -3350,13 +3634,15 @@ def page_admin_consolidado() -> None:
             st.rerun()
         return
 
-    tab_consolidado, tab_publicaciones, tab_cierre, tab_usuarios, tab_auditoria = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Usuarios", "Auditoría/Backup"])
+    tab_consolidado, tab_publicaciones, tab_cierre, tab_calidad, tab_usuarios, tab_auditoria = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Calidad de datos", "Usuarios", "Auditoría/Backup"])
     with tab_consolidado:
         render_admin_consolidado()
     with tab_publicaciones:
         render_admin_publicaciones()
     with tab_cierre:
         render_admin_cierre()
+    with tab_calidad:
+        render_admin_calidad_datos()
     with tab_usuarios:
         render_admin_usuarios()
     with tab_auditoria:

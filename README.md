@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.1.1.1)
+# DATOS CAPACIDAD DOCENTE (DCD 1.1.2)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -30,6 +30,7 @@ Esta versión parte de la DCD 1.0 y añade:
 - PDF preparado para incorporar `assets/logo.png` y frase institucional.
 - Auditoría ampliada: login correcto/fallido, consultas externas, descargas PDF/Excel y backup admin.
 - Panel administrador `Auditoría/Backup` con filtros y exportación segura de tablas principales.
+- Panel administrador `Calidad de datos` con validaciones, alertas y comparativa entre publicaciones.
 
 ## 1. Estructura del proyecto
 
@@ -333,3 +334,19 @@ Cambios:
 - Si falla la auditoría, el panel muestra el último error detectado.
 
 Es recomendable ejecutar de nuevo `supabase/schema.sql` en Supabase para dejar las políticas alineadas.
+
+## 21. DCD 1.1.2 - Calidad de datos y comparativa
+
+Esta versión añade una capa de revisión administrativa de calidad de datos sin modificar el flujo de carga de los centros docentes.
+
+Incluye:
+
+- Avisos básicos antes de finalizar un expediente: total 0, titulaciones duplicadas y valores altos.
+- Nueva pestaña `Calidad de datos` en el panel administrador.
+- Controles de centros pendientes, centros con borrador posterior, finalizados sin registros, duplicados y valores altos.
+- Listado informativo de titulaciones del catálogo sin plazas.
+- Comparativa entre las dos últimas publicaciones oficiales.
+- Nuevas hojas de calidad en el Excel consolidado.
+- Bloque de validaciones de calidad incorporado al PDF de publicación.
+
+No requiere SQL nuevo respecto a la DCD 1.1.1.1.
