@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.1.1)
+# DATOS CAPACIDAD DOCENTE (DCD 1.1.1.1)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -321,3 +321,15 @@ Esta versión no requiere SQL nuevo si ya existe la tabla `dcd_auditoria`. Añad
   - `dcd_configuracion`
 
 Por seguridad, el backup excluye los hashes de contraseña por defecto. Solo deben incluirse si existe una necesidad técnica clara.
+
+## 20. DCD 1.1.1.1 - Corrección de auditoría
+
+Esta versión corrige la auditoría cuando Supabase tiene Row Level Security activado en la tabla `dcd_auditoria`.
+
+Cambios:
+
+- Añadidas políticas RLS para `dcd_auditoria`.
+- Añadido botón de prueba manual de auditoría en `Panel administrador > Auditoría/Backup`.
+- Si falla la auditoría, el panel muestra el último error detectado.
+
+Es recomendable ejecutar de nuevo `supabase/schema.sql` en Supabase para dejar las políticas alineadas.

@@ -1,4 +1,4 @@
--- DCD 1.0 / 1.0.8.2 - Esquema Supabase / PostgreSQL
+-- DCD 1.0 / 1.1.1.1 - Esquema Supabase / PostgreSQL
 -- Ejecutar en Supabase > SQL Editor > New query.
 -- Este SQL sirve tanto para proyecto nuevo como para actualizar la versión 1.0.
 
@@ -105,6 +105,37 @@ on public.dcd_auditoria(codigo_borrador);
 
 create index if not exists idx_dcd_auditoria_created_at
 on public.dcd_auditoria(created_at);
+
+-- DCD 1.1.1.1 - Políticas RLS para auditoría
+-- Si Supabase activa RLS al ejecutar el SQL, estas políticas permiten que
+-- la app pueda registrar y consultar eventos de auditoría desde Streamlit.
+alter table public.dcd_auditoria enable row level security;
+
+drop policy if exists "DCD auditoria select" on public.dcd_auditoria;
+drop policy if exists "DCD auditoria insert" on public.dcd_auditoria;
+drop policy if exists "DCD auditoria update" on public.dcd_auditoria;
+drop policy if exists "DCD auditoria delete" on public.dcd_auditoria;
+
+create policy "DCD auditoria select"
+on public.dcd_auditoria
+for select
+using (true);
+
+create policy "DCD auditoria insert"
+on public.dcd_auditoria
+for insert
+with check (true);
+
+create policy "DCD auditoria update"
+on public.dcd_auditoria
+for update
+using (true)
+with check (true);
+
+create policy "DCD auditoria delete"
+on public.dcd_auditoria
+for delete
+using (true);
 
 create index if not exists idx_dcd_usuarios_username
 on public.dcd_usuarios(username);

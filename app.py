@@ -36,7 +36,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.1"
+APP_VERSION = "DCD 1.1.1.1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -431,14 +431,16 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
     return True, "Acceso correcto."
 
 
-def audit_event(action: str, detail: str = "", codigo_borrador: str = "") -> None:
+def audit_event(action: str, detail: str = "", codigo_borrador: str = "") -> bool:
     """
     Registra una acción en Supabase si la tabla dcd_auditoria existe.
-    La auditoría no debe bloquear el uso del aplicativo si falla.
+    La auditoría no debe bloquear el uso del aplicativo si falla, pero deja
+    trazado el último error para que el administrador pueda diagnosticarlo.
     """
     client = get_supabase_client()
     if client is None:
-        return
+        st.session_state["last_audit_error"] = "Supabase no está configurado."
+        return False
 
     try:
         client.table("dcd_auditoria").insert({
@@ -451,8 +453,11 @@ def audit_event(action: str, detail: str = "", codigo_borrador: str = "") -> Non
             "area": st.session_state.get("area_selected", ""),
             "unidad_docente": st.session_state.get("direccion_selected", ""),
         }).execute()
-    except Exception:
-        return
+        st.session_state["last_audit_error"] = ""
+        return True
+    except Exception as exc:
+        st.session_state["last_audit_error"] = str(exc)
+        return False
 
 
 def mailgun_configured() -> bool:
@@ -2304,6 +2309,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.9:** Portal externo de consulta de publicación vigente con dashboard y descargas limitadas.")
     st.markdown("- **DCD 1.1.0:** Mejora visual del dashboard, tarjetas compactas y PDF preparado para logo/frase institucional.")
     st.markdown("- **DCD 1.1.1:** Auditoría ampliada, registro de accesos/descargas y backup completo admin.")
+    st.markdown("- **DCD 1.1.1.1:** Corrección de políticas RLS de auditoría y diagnóstico manual de eventos.")
     st.markdown("- **DCD 1.0.9.1:** Ajustes de interfaz del portal y mantenimiento avanzado de usuarios.")
 
 
@@ -3223,6 +3229,21 @@ def render_admin_auditoria_backup() -> None:
         return
 
     st.markdown("### Auditoría reciente")
+
+    col_diag1, col_diag2 = st.columns([1, 2])
+    with col_diag1:
+        if st.button("Registrar evento de prueba", key="btn_test_auditoria"):
+            ok = audit_event("test_auditoria", "Prueba manual desde Panel administrador > Auditoría/Backup")
+            if ok:
+                st.success("Evento de prueba registrado correctamente.")
+                st.rerun()
+            else:
+                st.error(f"No se pudo registrar auditoría: {st.session_state.get('last_audit_error', 'Error desconocido')}")
+    with col_diag2:
+        last_error = st.session_state.get("last_audit_error", "")
+        if last_error:
+            st.caption(f"Último error de auditoría detectado: {last_error}")
+
     audit_df, err = fetch_table_for_backup("dcd_auditoria", limit=1000)
     if err:
         st.warning(f"No se pudo cargar la auditoría: {err}")
