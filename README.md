@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.1.0)
+# DATOS CAPACIDAD DOCENTE (DCD 1.1.1)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -28,6 +28,8 @@ Esta versión parte de la DCD 1.0 y añade:
 - Dashboard visual mejorado para portal de consulta y panel de publicaciones.
 - Tarjetas compactas para evitar cortes en publicación vigente, versión y fecha.
 - PDF preparado para incorporar `assets/logo.png` y frase institucional.
+- Auditoría ampliada: login correcto/fallido, consultas externas, descargas PDF/Excel y backup admin.
+- Panel administrador `Auditoría/Backup` con filtros y exportación segura de tablas principales.
 
 ## 1. Estructura del proyecto
 
@@ -300,3 +302,22 @@ assets/logo.png
 ```
 
 La aplicación lo detectará automáticamente al generar el PDF. Si no existe, el PDF se generará igualmente sin logo.
+
+## 19. DCD 1.1.1 - Auditoría y backup administrativo
+
+Esta versión no requiere SQL nuevo si ya existe la tabla `dcd_auditoria`. Añade:
+
+- Registro de intentos de login fallidos.
+- Registro controlado de consultas a la publicación vigente.
+- Registro de descargas de PDF/Excel desde portal de consulta y panel administrador.
+- Panel `Auditoría/Backup` para administradores.
+- Filtros de auditoría por acción y usuario.
+- Backup Excel de tablas principales:
+  - `dcd_usuarios`
+  - `dcd_borradores`
+  - `dcd_registros`
+  - `dcd_publicaciones`
+  - `dcd_auditoria`
+  - `dcd_configuracion`
+
+Por seguridad, el backup excluye los hashes de contraseña por defecto. Solo deben incluirse si existe una necesidad técnica clara.

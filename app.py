@@ -36,7 +36,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.0"
+APP_VERSION = "DCD 1.1.1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -1538,6 +1538,81 @@ def download_publication_file(path: str) -> tuple[bool, bytes | None, str]:
         return False, None, f"Error al descargar archivo: {exc}"
 
 
+def fetch_table_for_backup(table_name: str, limit: int = 10000) -> tuple[pd.DataFrame, str]:
+    """Descarga una tabla de Supabase para backup administrativo.
+
+    Devuelve DataFrame y mensaje de error si lo hubiera. No bloquea si una tabla no existe.
+    """
+    client = get_supabase_client()
+    if client is None:
+        return pd.DataFrame(), "Supabase no está configurado."
+
+    try:
+        query = client.table(table_name).select("*").limit(limit)
+        if table_name in {"dcd_auditoria", "dcd_borradores", "dcd_registros", "dcd_publicaciones"}:
+            query = query.order("created_at", desc=True)
+        elif table_name == "dcd_usuarios":
+            query = query.order("username")
+        resp = query.execute()
+        rows = getattr(resp, "data", []) or []
+        return pd.DataFrame(rows), ""
+    except Exception as exc:
+        return pd.DataFrame(), str(exc)
+
+
+def generate_admin_backup_excel(include_password_hashes: bool = False) -> tuple[bool, bytes | None, str]:
+    """Genera un backup administrativo en Excel de las tablas principales.
+
+    Por seguridad, los hashes de contraseña se excluyen por defecto.
+    """
+    if not supabase_available():
+        return False, None, "Supabase no está configurado."
+
+    tables = [
+        "dcd_usuarios",
+        "dcd_borradores",
+        "dcd_registros",
+        "dcd_publicaciones",
+        "dcd_auditoria",
+        "dcd_configuracion",
+    ]
+    errors = []
+    output = io.BytesIO()
+
+    try:
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            resumen_rows = []
+            for table in tables:
+                df, err = fetch_table_for_backup(table)
+                if err:
+                    errors.append({"tabla": table, "error": err})
+                if table == "dcd_usuarios" and not df.empty and not include_password_hashes:
+                    if "password_hash" in df.columns:
+                        df = df.drop(columns=["password_hash"])
+                    df["password_hash_exportado"] = "No. Excluido por seguridad."
+                sheet = table.replace("dcd_", "")[:31]
+                df.to_excel(writer, sheet_name=sheet, index=False)
+                resumen_rows.append({
+                    "tabla": table,
+                    "filas_exportadas": len(df),
+                    "estado": "OK" if not err else "ERROR",
+                    "observacion": err,
+                })
+
+            pd.DataFrame(resumen_rows).to_excel(writer, sheet_name="Resumen_backup", index=False)
+            if errors:
+                pd.DataFrame(errors).to_excel(writer, sheet_name="Errores", index=False)
+
+        output.seek(0)
+        audit_event(
+            "backup_admin_generado",
+            f"Backup generado. Hashes incluidos: {'sí' if include_password_hashes else 'no'}",
+        )
+        return True, output.getvalue(), "Backup generado correctamente."
+    except Exception as exc:
+        return False, None, f"Error al generar backup: {exc}"
+
+
 def send_admin_notification(subject: str, text: str) -> tuple[bool, str]:
     api_key = get_secret("MAILGUN_API_KEY", "")
     domain = get_secret("MAILGUN_DOMAIN", "")
@@ -1899,6 +1974,8 @@ def render_publication_downloads(pub: dict, prefix: str = "portal") -> None:
                     file_name=f"{pub.get('codigo_publicacion', 'DCD')}_Matriz_DCD.pdf",
                     mime="application/pdf",
                     key=f"{prefix}_download_pdf",
+                    on_click=audit_event,
+                    args=("descarga_pdf_publicacion", f"{prefix} | {pub.get('codigo_publicacion', '')}"),
                 )
             else:
                 st.error(msg)
@@ -1912,6 +1989,8 @@ def render_publication_downloads(pub: dict, prefix: str = "portal") -> None:
                     file_name=f"{pub.get('codigo_publicacion', 'DCD')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"{prefix}_download_excel",
+                    on_click=audit_event,
+                    args=("descarga_excel_publicacion", f"{prefix} | {pub.get('codigo_publicacion', '')}"),
                 )
             else:
                 st.error(msg)
@@ -2206,6 +2285,7 @@ def page_login() -> None:
             st.rerun()
         else:
             st.error(msg)
+            audit_event("login_fallido", f"Intento fallido. Usuario: {username}")
 
     st.markdown("---")
     st.markdown("##### Historial de versiones")
@@ -2223,6 +2303,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.8.2:** Refuerzo de evaluación de cierre al acceder cualquier usuario, al finalizar centros y desde botón admin.")
     st.markdown("- **DCD 1.0.9:** Portal externo de consulta de publicación vigente con dashboard y descargas limitadas.")
     st.markdown("- **DCD 1.1.0:** Mejora visual del dashboard, tarjetas compactas y PDF preparado para logo/frase institucional.")
+    st.markdown("- **DCD 1.1.1:** Auditoría ampliada, registro de accesos/descargas y backup completo admin.")
     st.markdown("- **DCD 1.0.9.1:** Ajustes de interfaz del portal y mantenimiento avanzado de usuarios.")
 
 
@@ -2899,14 +2980,28 @@ def render_admin_publicaciones() -> None:
             if st.button("Preparar descarga PDF"):
                 ok, data, msg = download_publication_file(pub.get("ruta_pdf", ""))
                 if ok and data:
-                    st.download_button("Descargar PDF Matriz_DCD", data=data, file_name=f"{selected}_Matriz_DCD.pdf", mime="application/pdf")
+                    st.download_button(
+                        "Descargar PDF Matriz_DCD",
+                        data=data,
+                        file_name=f"{selected}_Matriz_DCD.pdf",
+                        mime="application/pdf",
+                        on_click=audit_event,
+                        args=("descarga_pdf_historico_admin", selected),
+                    )
                 else:
                     st.error(msg)
         with c2:
             if st.button("Preparar descarga Excel"):
                 ok, data, msg = download_publication_file(pub.get("ruta_excel", ""))
                 if ok and data:
-                    st.download_button("Descargar Excel consolidado", data=data, file_name=f"{selected}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    st.download_button(
+                        "Descargar Excel consolidado",
+                        data=data,
+                        file_name=f"{selected}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        on_click=audit_event,
+                        args=("descarga_excel_historico_admin", selected),
+                    )
                 else:
                     st.error(msg)
 
@@ -3119,6 +3214,68 @@ def render_admin_usuarios() -> None:
                 st.error(msg)
 
 
+def render_admin_auditoria_backup() -> None:
+    st.subheader("Auditoría y backup")
+    st.info("Esta pantalla permite revisar acciones recientes y exportar una copia administrativa de las tablas principales.")
+
+    if not supabase_available():
+        st.warning("Supabase no está configurado. No se puede consultar auditoría ni generar backup.")
+        return
+
+    st.markdown("### Auditoría reciente")
+    audit_df, err = fetch_table_for_backup("dcd_auditoria", limit=1000)
+    if err:
+        st.warning(f"No se pudo cargar la auditoría: {err}")
+    elif audit_df.empty:
+        st.info("No hay eventos de auditoría registrados todavía.")
+    else:
+        if "created_at" in audit_df.columns:
+            audit_df = audit_df.sort_values("created_at", ascending=False)
+        acciones = sorted([a for a in audit_df.get("accion", pd.Series(dtype=str)).dropna().unique().tolist() if a])
+        usuarios = sorted([u for u in audit_df.get("usuario", pd.Series(dtype=str)).dropna().unique().tolist() if u])
+
+        col_f1, col_f2, col_f3 = st.columns(3)
+        with col_f1:
+            filtro_accion = st.selectbox("Filtrar por acción", options=["Todas"] + acciones)
+        with col_f2:
+            filtro_usuario = st.selectbox("Filtrar por usuario", options=["Todos"] + usuarios)
+        with col_f3:
+            limite = st.number_input("Eventos a mostrar", min_value=50, max_value=1000, value=200, step=50)
+
+        filtered = audit_df.copy()
+        if filtro_accion != "Todas" and "accion" in filtered.columns:
+            filtered = filtered[filtered["accion"] == filtro_accion]
+        if filtro_usuario != "Todos" and "usuario" in filtered.columns:
+            filtered = filtered[filtered["usuario"] == filtro_usuario]
+        st.dataframe(filtered.head(int(limite)), use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+    st.markdown("### Backup administrativo")
+    st.warning("El backup puede contener información administrativa sensible. Descárguelo y consérvelo en una ubicación segura.")
+    include_hashes = st.checkbox(
+        "Incluir hashes de contraseña en el backup (no recomendado)",
+        value=False,
+        help="Los hashes no son contraseñas visibles, pero siguen siendo material sensible. Déjelo desmarcado salvo necesidad técnica.",
+    )
+
+    if st.button("Generar backup completo"):
+        ok, data, msg = generate_admin_backup_excel(include_password_hashes=include_hashes)
+        if ok and data:
+            filename = f"DCD_backup_admin_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            st.success(msg)
+            st.download_button(
+                "Descargar backup Excel",
+                data=data,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                on_click=audit_event,
+                args=("descarga_backup_admin", filename),
+            )
+        else:
+            st.error(msg)
+
+
+
 def page_portal_externo() -> None:
     st.title("Portal de consulta - DATOS CAPACIDAD DOCENTE")
     st.markdown("---")
@@ -3156,7 +3313,10 @@ def page_portal_externo() -> None:
     st.markdown("### Descargas")
     render_publication_downloads(pub, prefix="external_portal")
 
-    audit_event("consulta_publicacion_vigente", f"Consulta externa de {pub.get('codigo_publicacion', '')}")
+    audit_key = f"auditoria_consulta_publicacion_{pub.get('codigo_publicacion', '')}"
+    if not st.session_state.get(audit_key):
+        audit_event("consulta_publicacion_vigente", f"Consulta externa de {pub.get('codigo_publicacion', '')}")
+        st.session_state[audit_key] = True
 
 
 def page_admin_consolidado() -> None:
@@ -3169,7 +3329,7 @@ def page_admin_consolidado() -> None:
             st.rerun()
         return
 
-    tab_consolidado, tab_publicaciones, tab_cierre, tab_usuarios = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Usuarios"])
+    tab_consolidado, tab_publicaciones, tab_cierre, tab_usuarios, tab_auditoria = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Usuarios", "Auditoría/Backup"])
     with tab_consolidado:
         render_admin_consolidado()
     with tab_publicaciones:
@@ -3178,6 +3338,8 @@ def page_admin_consolidado() -> None:
         render_admin_cierre()
     with tab_usuarios:
         render_admin_usuarios()
+    with tab_auditoria:
+        render_admin_auditoria_backup()
 
     st.markdown("---")
     if st.button("Volver al aplicativo"):
