@@ -19,7 +19,7 @@ try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A3, landscape
     from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 except Exception:
     colors = None
     landscape = None
@@ -30,15 +30,19 @@ except Exception:
     TableStyle = None
     Paragraph = None
     Spacer = None
+    Image = None
 
 
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.0.9.1"
+APP_VERSION = "DCD 1.1.0"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
+ASSETS_DIR = Path(__file__).parent / "assets"
+LOGO_PATH = ASSETS_DIR / "logo.png"
+INSTITUTIONAL_PHRASE = "Informe desarrollado para la gestión y análisis de los Datos de Capacidad Docente del Servicio correspondiente."
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -1352,7 +1356,16 @@ def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[
         bottomMargin=18,
     )
     styles = getSampleStyleSheet()
-    story = [Paragraph(titulo, styles["Title"])]
+    story = []
+    if Image is not None and LOGO_PATH.exists():
+        try:
+            story.append(Image(str(LOGO_PATH), width=120, height=60, kind="proportional"))
+            story.append(Spacer(1, 6))
+        except Exception:
+            pass
+    story.append(Paragraph(titulo, styles["Title"]))
+    story.append(Paragraph(INSTITUTIONAL_PHRASE, styles["Normal"]))
+    story.append(Spacer(1, 6))
     for linea in resumen_lineas:
         story.append(Paragraph(str(linea), styles["Normal"]))
     story.append(Spacer(1, 8))
@@ -1853,9 +1866,9 @@ def render_info_card(label: str, value: str) -> None:
     """Tarjeta compacta para evitar cortes con puntos suspensivos en textos largos."""
     st.markdown(
         f"""
-        <div style="border:1px solid #e5e7eb; border-radius:10px; padding:0.65rem 0.8rem; background:#f8fafc; min-height:72px;">
-            <div style="font-size:0.78rem; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.02em; margin-bottom:0.25rem;">{label}</div>
-            <div style="font-size:0.98rem; color:#0f172a; font-weight:700; line-height:1.2; word-break:break-word; white-space:normal;">{value or '-'}</div>
+        <div class="dcd-card">
+            <div class="dcd-card-label">{label}</div>
+            <div class="dcd-card-value">{value or '-'}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2209,6 +2222,7 @@ def page_login() -> None:
     st.markdown("- **DCD 1.0.8.1:** Cierre configurable: fecha tope, modos de cierre, avisos previos y publicación automática por vencimiento si procede.")
     st.markdown("- **DCD 1.0.8.2:** Refuerzo de evaluación de cierre al acceder cualquier usuario, al finalizar centros y desde botón admin.")
     st.markdown("- **DCD 1.0.9:** Portal externo de consulta de publicación vigente con dashboard y descargas limitadas.")
+    st.markdown("- **DCD 1.1.0:** Mejora visual del dashboard, tarjetas compactas y PDF preparado para logo/frase institucional.")
     st.markdown("- **DCD 1.0.9.1:** Ajustes de interfaz del portal y mantenimiento avanzado de usuarios.")
 
 

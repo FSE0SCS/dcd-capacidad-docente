@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.0.9.1)
+# DATOS CAPACIDAD DOCENTE (DCD 1.1.0)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -24,6 +24,11 @@ Esta versión parte de la DCD 1.0 y añade:
 - Cambio visible de `Unidad Docente` a `Centro Docente`.
 - Portal externo de consulta de publicación vigente con dashboard y descargas controladas.
 
+- Mantenimiento avanzado de usuarios: activar, desactivar, resetear y eliminar con confirmación.
+- Dashboard visual mejorado para portal de consulta y panel de publicaciones.
+- Tarjetas compactas para evitar cortes en publicación vigente, versión y fecha.
+- PDF preparado para incorporar `assets/logo.png` y frase institucional.
+
 ## 1. Estructura del proyecto
 
 ```text
@@ -36,6 +41,8 @@ dcd_capacidad_docente/
 │   └── secrets.toml.example
 ├── data/
 │   └── listado_para_capacidad_docente.xlsx
+├── assets/
+│   └── logo.png  # opcional
 └── supabase/
     └── schema.sql
 ```
@@ -282,3 +289,14 @@ Para crear un usuario externo:
 - Mantenimiento avanzado de usuarios: activar, desactivar, resetear contraseña y eliminar con confirmación.
 - Recomendación: usar desactivar para bajas ordinarias y eliminar solo cuando proceda limpiar la tabla de usuarios.
 - Si no se ejecutó el SQL del rol consulta, ejecutar `supabase/schema.sql`.
+
+
+## Logo institucional
+
+Para incorporar el logo al PDF de publicación, coloque el archivo en:
+
+```text
+assets/logo.png
+```
+
+La aplicación lo detectará automáticamente al generar el PDF. Si no existe, el PDF se generará igualmente sin logo.
