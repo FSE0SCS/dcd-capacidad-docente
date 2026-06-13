@@ -37,13 +37,14 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.2.1"
+APP_VERSION = "DCD 1.1.2.2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
 ASSETS_DIR = Path(__file__).parent / "assets"
 LOGO_PATH = ASSETS_DIR / "logo.png"
-INSTITUTIONAL_PHRASE = "Informe desarrollado para la gestión y análisis de los Datos de Capacidad Docente del Servicio correspondiente."
+INSTITUTIONAL_PHRASE = "Informe desarrollado para la gestión y análisis de los Datos de Capacidad Docente del Servicio Canario de la Salud."
+SIGNATURE_FOOTER = "Jefatura del Servicio de Formacion Sanitaria Especializada"
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -1530,6 +1531,21 @@ def add_pdf_table(story: list, title: str, df: pd.DataFrame, styles, max_rows: i
     story.append(table)
     story.append(Spacer(1, 8))
 
+def draw_pdf_footer(canvas, doc):
+    """Pie de página común en los informes PDF publicados."""
+    canvas.saveState()
+    width, _height = landscape(A3)
+    footer_y = 12
+    canvas.setStrokeColor(colors.HexColor("#BFBFBF"))
+    canvas.setLineWidth(0.4)
+    canvas.line(doc.leftMargin, footer_y + 10, width - doc.rightMargin, footer_y + 10)
+    canvas.setFont("Helvetica", 7)
+    canvas.setFillColor(colors.HexColor("#4F4F4F"))
+    canvas.drawString(doc.leftMargin, footer_y, SIGNATURE_FOOTER)
+    canvas.drawRightString(width - doc.rightMargin, footer_y, f"Página {doc.page}")
+    canvas.restoreState()
+
+
 def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[str], analytics: dict[str, pd.DataFrame] | None = None) -> bytes:
     if SimpleDocTemplate is None or Table is None:
         raise RuntimeError("La librería reportlab no está instalada. Añada reportlab a requirements.txt y reinicie la app.")
@@ -1542,7 +1558,7 @@ def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[
         leftMargin=18,
         rightMargin=18,
         topMargin=18,
-        bottomMargin=18,
+        bottomMargin=28,
     )
     styles = getSampleStyleSheet()
     story = []
@@ -1606,7 +1622,7 @@ def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[
         ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
     ]))
     story.append(table)
-    doc.build(story)
+    doc.build(story, onFirstPage=draw_pdf_footer, onLaterPages=draw_pdf_footer)
     output.seek(0)
     return output.getvalue()
 
@@ -3651,6 +3667,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.1.1", "Corrección de políticas RLS de auditoría y diagnóstico manual de eventos."),
         ("DCD 1.1.2", "Calidad de datos: avisos, validaciones, valores atípicos y comparativa entre publicaciones."),
         ("DCD 1.1.2.1", "Pulido de interfaz, ocultación de historial en login y lenguaje no técnico para usuarios."),
+        ("DCD 1.1.2.2", "Ajustes finales de PDF: logo, frase institucional, pie de firma y numeración de páginas."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
