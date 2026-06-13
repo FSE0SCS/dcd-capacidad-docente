@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 try:
     from supabase import create_client
@@ -36,7 +37,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.2"
+APP_VERSION = "DCD 1.1.2.1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -439,7 +440,7 @@ def audit_event(action: str, detail: str = "", codigo_borrador: str = "") -> boo
     """
     client = get_supabase_client()
     if client is None:
-        st.session_state["last_audit_error"] = "Supabase no está configurado."
+        st.session_state["last_audit_error"] = "La Base de Datos no está configurada."
         return False
 
     try:
@@ -476,7 +477,7 @@ def send_email_with_mailgun(excel_bytes: bytes, filename: str) -> tuple[bool, st
     recipient = get_secret("MAILGUN_RECIPIENT_EMAIL", "")
 
     if not all([api_key, domain, sender, recipient]):
-        return False, "Mailgun no está configurado en secrets. Puede descargar el Excel y enviarlo manualmente."
+        return False, "El servidor de correo no está configurado. Puede descargar el Excel y enviarlo manualmente."
 
     codigo = st.session_state.codigo_borrador or build_codigo_borrador(st.session_state.direccion_selected)
     subject = f"DCD 1.0 - Datos Capacidad Docente - {codigo}"
@@ -581,7 +582,7 @@ def get_next_version_num(codigo_expediente: str) -> int:
 def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado todavía. Puedes seguir usando el MVP local y descargar el Excel."
+        return False, "La Base de Datos no está configurada todavía. Puede seguir usando la descarga del Excel."
 
     unidad = st.session_state.direccion_selected
     if not is_admin() and user_scope_unidad() and unidad != user_scope_unidad():
@@ -636,19 +637,17 @@ def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
                     f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
                 ),
             )
-            auto_msg = maybe_auto_publish_if_complete()
-            if auto_msg:
-                return True, f"Expediente finalizado correctamente como nueva versión: {codigo_borrador}. {auto_msg}"
-            return True, f"Expediente finalizado correctamente como nueva versión: {codigo_borrador}"
+            maybe_auto_publish_if_complete()
+            return True, f"Expediente finalizado correctamente como nueva versión: {codigo_borrador}."
         return True, f"Borrador guardado correctamente como nueva versión: {codigo_borrador}"
     except Exception as exc:
-        return False, f"Error al guardar en Supabase: {exc}"
+        return False, f"Error al guardar en Base de Datos: {exc}"
 
 
 def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado."
+        return False, "La Base de Datos no está configurada."
 
     try:
         borrador_resp = client.table("dcd_borradores").select("*").eq("codigo_borrador", codigo_borrador).limit(1).execute()
@@ -735,7 +734,7 @@ def save_user_to_supabase(
 ) -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado."
+        return False, "La Base de Datos no está configurada."
 
     username = (username or "").strip().lower()
     if not username:
@@ -768,7 +767,7 @@ def save_user_to_supabase(
 def reset_user_password(username: str, new_password: str, must_change_password: bool = True) -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado."
+        return False, "La Base de Datos no está configurada."
     username = (username or "").strip().lower()
     if not username or not new_password:
         return False, "Debe indicar usuario y nueva contraseña."
@@ -786,7 +785,7 @@ def reset_user_password(username: str, new_password: str, must_change_password: 
 def set_user_active(username: str, active: bool) -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado."
+        return False, "La Base de Datos no está configurada."
     username = (username or "").strip().lower()
     if not username:
         return False, "Debe indicar un usuario."
@@ -802,7 +801,7 @@ def delete_user_from_supabase(username: str) -> tuple[bool, str]:
     """Elimina físicamente un usuario. Usar solo si no se necesita conservarlo en el listado operativo."""
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado."
+        return False, "La Base de Datos no está configurada."
     username = (username or "").strip().lower()
     if not username:
         return False, "Debe indicar un usuario."
@@ -1065,7 +1064,7 @@ def send_missing_centros_email(missing: list[str], status_df: pd.DataFrame) -> t
     recipient = get_secret("MAILGUN_RECIPIENT_EMAIL", "")
 
     if not all([api_key, domain, sender, recipient]):
-        return False, "Mailgun no está configurado en secrets. Puede revisar el listado de pendientes en pantalla."
+        return False, "El servidor de correo no está configurado. Puede revisar el listado de pendientes en pantalla."
 
     if not missing:
         return False, "No hay centros pendientes que notificar."
@@ -1259,7 +1258,7 @@ def build_current_analytics_from_supabase() -> tuple[bool, str, dict[str, pd.Dat
     """Genera analítica rápida con la última versión finalizada por centro."""
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado.", None
+        return False, "La Base de Datos no está configurada.", None
     try:
         borradores, _duplicados = get_latest_finalized_drafts()
         if not borradores:
@@ -1295,7 +1294,7 @@ def build_current_dataset_from_supabase() -> tuple[bool, str, pd.DataFrame | Non
     """Construye la matriz y registros consolidados con la última versión finalizada por centro."""
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado.", None, None, None, [], []
+        return False, "La Base de Datos no está configurada.", None, None, None, [], []
     try:
         borradores, duplicados = get_latest_finalized_drafts()
         status_df, _missing = get_admin_centros_status()
@@ -1616,7 +1615,7 @@ def build_publication_package() -> tuple[bool, str, dict | None]:
     """Construye los objetos necesarios para una publicación, sin guardarlos todavía."""
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado.", None
+        return False, "La Base de Datos no está configurada.", None
 
     borradores, duplicados = get_latest_finalized_drafts()
     if not borradores:
@@ -1729,7 +1728,7 @@ def upload_publication_file(client, path: str, data: bytes, content_type: str) -
 def download_publication_file(path: str) -> tuple[bool, bytes | None, str]:
     client = get_supabase_client()
     if client is None:
-        return False, None, "Supabase no está configurado."
+        return False, None, "La Base de Datos no está configurada."
     try:
         data = client.storage.from_(PUBLICATION_BUCKET).download(path)
         return True, data, "Archivo descargado."
@@ -1744,7 +1743,7 @@ def fetch_table_for_backup(table_name: str, limit: int = 10000) -> tuple[pd.Data
     """
     client = get_supabase_client()
     if client is None:
-        return pd.DataFrame(), "Supabase no está configurado."
+        return pd.DataFrame(), "La Base de Datos no está configurada."
 
     try:
         query = client.table(table_name).select("*").limit(limit)
@@ -1765,7 +1764,7 @@ def generate_admin_backup_excel(include_password_hashes: bool = False) -> tuple[
     Por seguridad, los hashes de contraseña se excluyen por defecto.
     """
     if not supabase_available():
-        return False, None, "Supabase no está configurado."
+        return False, None, "La Base de Datos no está configurada."
 
     tables = [
         "dcd_usuarios",
@@ -1819,7 +1818,7 @@ def send_admin_notification(subject: str, text: str) -> tuple[bool, str]:
     recipient = get_secret("MAILGUN_RECIPIENT_EMAIL", "")
 
     if not all([api_key, domain, sender, recipient]):
-        return False, "Mailgun no está configurado; no se ha enviado correo de notificación."
+        return False, "El servidor de correo no está configurado; no se ha enviado correo de notificación."
     try:
         response = requests.post(
             f"https://api.mailgun.net/v3/{domain}/messages",
@@ -1870,7 +1869,7 @@ def get_config_value(key: str, default: str = "") -> str:
 def set_config_value(key: str, value: str) -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado."
+        return False, "La Base de Datos no está configurada."
     try:
         client.table("dcd_configuracion").upsert({
             "clave": key,
@@ -2003,7 +2002,7 @@ def evaluar_cierre_automatico() -> str:
 def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) -> tuple[bool, str]:
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado."
+        return False, "La Base de Datos no está configurada."
 
     ok, msg, package = build_publication_package()
     if not ok or not package:
@@ -2237,7 +2236,7 @@ def maybe_auto_publish_if_complete() -> str:
 def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, str]:
     client = get_supabase_client()
     if client is None:
-        return False, "Supabase no está configurado.", None, ""
+        return False, "La Base de Datos no está configurada.", None, ""
 
     try:
         borradores, duplicados = get_latest_finalized_drafts()
@@ -2437,6 +2436,21 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
 # =========================================================
 # COMPONENTES DE INTERFAZ
 # =========================================================
+def scroll_to_top() -> None:
+    """Intenta llevar la vista a la parte superior tras cambios de paso en Streamlit."""
+    components.html(
+        """
+        <script>
+            const doc = window.parent.document;
+            const main = doc.querySelector('section.main') || doc.querySelector('[data-testid="stAppViewContainer"]');
+            if (main) { main.scrollTo({top: 0, behavior: 'smooth'}); }
+            window.parent.scrollTo({top: 0, behavior: 'smooth'});
+        </script>
+        """,
+        height=0,
+    )
+
+
 def app_sidebar() -> None:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ℹ️ Información")
@@ -2449,15 +2463,15 @@ def app_sidebar() -> None:
             st.sidebar.caption(f"Centro asignado: {st.session_state.current_user_unidad}")
 
     if supabase_available():
-        st.sidebar.success("Supabase configurado")
+        st.sidebar.success("Base de Datos configurada")
     else:
-        st.sidebar.warning("Supabase no configurado")
-        st.sidebar.caption("El aplicativo funciona como MVP local, pero no guarda borradores entre sesiones.")
+        st.sidebar.warning("Base de Datos no configurada")
+        st.sidebar.caption("El aplicativo funciona en modo local, pero no guarda borradores entre sesiones.")
 
     if mailgun_configured():
-        st.sidebar.success("Mailgun configurado")
+        st.sidebar.success("Servidor correo configurado")
     else:
-        st.sidebar.info("Mailgun no configurado")
+        st.sidebar.info("Servidor correo no configurado")
 
     if st.session_state.get("current_user_role") == "admin":
         st.sidebar.markdown("---")
@@ -2492,26 +2506,14 @@ def page_login() -> None:
             st.error(msg)
             audit_event("login_fallido", f"Intento fallido. Usuario: {username}")
 
-    st.markdown("---")
-    st.markdown("##### Historial de versiones")
-    st.markdown("- **DCD 1.0:** MVP inicial con contraseña, instrucciones, selección de centro docente, selectores dependientes y preparación para Supabase.")
-    st.markdown("- **DCD 1.0.1:** Pantalla de recordatorio, correo automático opcional, usuarios configurables, auditoría y revisión de mapeo.")
-    st.markdown("- **DCD 1.0.2:** Ajuste de áreas: Hospital, Atención Familiar y Comunitaria, y retirada de Otras Unidades Docentes.")
-    st.markdown("- **DCD 1.0.3:** Cierre estable: exportación más completa, estado finalizado y bloqueo suave de edición.")
-    st.markdown("- **DCD 1.0.4:** Totales en Matriz_DCD y panel administrador para Excel consolidado desde Supabase.")
-    st.markdown("- **DCD 1.0.5:** Usuarios por centro docente, contraseñas hasheadas, reset por admin y borradores filtrados.")
-    st.markdown("- **DCD 1.0.5.1:** Corrección del selector de centro docente al crear usuarios.")
-    st.markdown("- **DCD 1.0.6:** Guardado versionado, control de centros pendientes y cambio visible a Centros Docentes.")
-    st.markdown("- **DCD 1.0.7:** Publicaciones oficiales: PDF Matriz_DCD, histórico/vigente, Supabase Storage y notificación al administrador.")
-    st.markdown("- **DCD 1.0.8:** Dashboard y análisis de publicación: resúmenes por provincia, isla, centro, rama, nivel y titulaciones en Excel/PDF/panel admin.")
-    st.markdown("- **DCD 1.0.8.1:** Cierre configurable: fecha tope, modos de cierre, avisos previos y publicación automática por vencimiento si procede.")
-    st.markdown("- **DCD 1.0.8.2:** Refuerzo de evaluación de cierre al acceder cualquier usuario, al finalizar centros y desde botón admin.")
-    st.markdown("- **DCD 1.0.9:** Portal externo de consulta de publicación vigente con dashboard y descargas limitadas.")
-    st.markdown("- **DCD 1.1.0:** Mejora visual del dashboard, tarjetas compactas y PDF preparado para logo/frase institucional.")
-    st.markdown("- **DCD 1.1.1:** Auditoría ampliada, registro de accesos/descargas y backup completo admin.")
-    st.markdown("- **DCD 1.0.9.1:** Ajustes de interfaz del portal y mantenimiento avanzado de usuarios.")
-    st.markdown("- **DCD 1.1.1.1:** Corrección de políticas RLS de auditoría y diagnóstico manual de eventos.")
-    st.markdown("- **DCD 1.1.2:** Calidad de datos: avisos, validaciones, valores atípicos y comparativa entre publicaciones.")
+    st.markdown(
+        f"""
+        <div style="position: fixed; right: 18px; bottom: 12px; color: #888; font-size: 0.80rem; z-index: 999;">
+            Versión {APP_VERSION.replace('DCD ', '')}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def page_change_password() -> None:
@@ -2548,14 +2550,14 @@ def page_instrucciones() -> None:
            **Nivel Estudio I → Nivel Estudio II → Rama → Titulación**.
         4. Para cada titulación, indique el **número de alumnos**.
         5. Puede añadir varios registros antes de generar el Excel.
-        6. Si Supabase está configurado, podrá guardar y recuperar borradores.
+        6. Si la Base de Datos está configurada, podrá guardar y recuperar borradores.
         7. Antes de finalizar, el aplicativo mostrará una pantalla específica de recordatorio y descarga/envío.
 
         **Advertencias:**
 
         - Revise bien la titulación seleccionada antes de añadirla.
         - Si introduce de nuevo una misma combinación, se actualizará el número de alumnos.
-        - El envío automático por correo solo funcionará si Mailgun está configurado en los secretos de Streamlit.
+        - El envío automático por correo solo funcionará si el servidor de correo aparece en verde.
         """
     )
 
@@ -2616,7 +2618,7 @@ def page_seleccion_unidad() -> None:
             else:
                 st.info("No se encontraron borradores guardados de su centro docente.")
         else:
-            st.info("Supabase no está configurado. No se pueden cargar borradores guardados.")
+            st.info("La Base de Datos no está configurada. No se pueden cargar borradores guardados.")
         return
 
     st.session_state.area_selected = st.selectbox(
@@ -2680,7 +2682,7 @@ def page_seleccion_unidad() -> None:
         else:
             st.info("No se encontraron borradores guardados o aún no hay conexión válida.")
     else:
-        st.info("Cuando configuremos Supabase, aquí aparecerá la carga de borradores.")
+        st.info("Cuando esté configurada la Base de Datos, aquí aparecerá la carga de borradores.")
 
 
 def page_confirmacion() -> None:
@@ -2702,16 +2704,17 @@ def page_confirmacion() -> None:
             "Se podrán guardar registros y generar hoja de registros, pero quizá haya que revisar el mapeo para la matriz final."
         )
 
-    with st.expander("Revisión del mapeo centro docente ↔ columna Excel"):
-        mapping_rows = []
-        for direccion, codigo in CODIGOS_DIRECCION.items():
-            mapping_rows.append({
-                "Centro docente": direccion,
-                "Código interno": codigo,
-                "Columna Excel": COLUMNA_EXCEL_POR_DIRECCION.get(direccion, "PENDIENTE DE MAPEAR"),
-            })
-        st.dataframe(pd.DataFrame(mapping_rows), use_container_width=True, hide_index=True)
-        st.caption("Esta tabla permite revisar qué centros vuelcan datos directamente en la matriz Excel y cuáles quedan pendientes de correspondencia definitiva.")
+    if is_admin():
+        with st.expander("Revisión del mapeo centro docente ↔ columna Excel"):
+            mapping_rows = []
+            for direccion, codigo in CODIGOS_DIRECCION.items():
+                mapping_rows.append({
+                    "Centro docente": direccion,
+                    "Código interno": codigo,
+                    "Columna Excel": COLUMNA_EXCEL_POR_DIRECCION.get(direccion, "PENDIENTE DE MAPEAR"),
+                })
+            st.dataframe(pd.DataFrame(mapping_rows), use_container_width=True, hide_index=True)
+            st.caption("Esta tabla permite revisar qué centros vuelcan datos directamente en la matriz Excel y cuáles quedan pendientes de correspondencia definitiva.")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -2897,6 +2900,7 @@ def page_entrada_datos() -> None:
 
 
 def page_resumen_descarga() -> None:
+    scroll_to_top()
     st.header("Paso 5: Recordatorio, cierre y envío")
     registros = list(st.session_state.registros.values())
     if not registros:
@@ -2989,7 +2993,7 @@ def page_resumen_descarga() -> None:
 
     col4, col5 = st.columns(2)
     with col4:
-        if st.button("Finalizar expediente en Supabase"):
+        if st.button("Finalizar expediente en Base de Datos"):
             if not all([check1, check2, check3]):
                 st.warning("Debe marcar las tres casillas de revisión antes de finalizar.")
             else:
@@ -3018,7 +3022,7 @@ def page_resumen_descarga() -> None:
                     st.warning(msg_save)
 
     st.markdown("---")
-    st.caption("Si Mailgun no está configurado, el botón de correo mostrará un aviso y podrá seguir usando la descarga manual.")
+    st.caption("Si el Servidor de Correo no está configurado, el botón de correo mostrará un aviso y podrá seguir usando la descarga manual.")
 
 
 def render_admin_consolidado() -> None:
@@ -3037,7 +3041,7 @@ def render_admin_consolidado() -> None:
     )
 
     if not supabase_available():
-        st.warning("Supabase no está configurado. No se puede generar el consolidado.")
+        st.warning("La Base de Datos no está configurada. No se puede generar el consolidado.")
         return
 
     borradores, duplicados = get_latest_finalized_drafts()
@@ -3118,7 +3122,7 @@ def render_admin_publicaciones() -> None:
     )
 
     if not supabase_available():
-        st.warning("Supabase no está configurado. No se pueden gestionar publicaciones.")
+        st.warning("La Base de Datos no está configurada. No se pueden gestionar publicaciones.")
         return
 
     status_df, missing_centros = get_admin_centros_status()
@@ -3246,7 +3250,7 @@ def render_admin_cierre() -> None:
     )
 
     if not supabase_available():
-        st.warning("Supabase no está configurado. No se puede guardar configuración de cierre.")
+        st.warning("La Base de Datos no está configurada. No se puede guardar configuración de cierre.")
         return
 
     cfg = get_cierre_config()
@@ -3331,7 +3335,7 @@ def render_admin_cierre() -> None:
             else:
                 st.success("No hay centros pendientes que avisar.")
 
-    st.caption("Los avisos automáticos dependen de Mailgun. Si Mailgun no está configurado, la app dejará constancia del estado pero no enviará correo.")
+    st.caption("Los avisos automáticos dependen del servidor de correo. Si no está configurado, la app dejará constancia del estado pero no enviará correo.")
     st.caption("La publicación por fecha tope se evalúa al usar la app o al pulsar 'Evaluar ahora cierre automático'. Para automatismo 24/7 sin accesos habría que añadir una tarea programada externa.")
 
 
@@ -3340,7 +3344,7 @@ def render_admin_usuarios() -> None:
     st.info("Las contraseñas se guardan hasheadas. El administrador puede resetearlas, pero no verlas.")
 
     if not supabase_available():
-        st.warning("Supabase no está configurado. No se pueden gestionar usuarios.")
+        st.warning("La Base de Datos no está configurada. No se pueden gestionar usuarios.")
         return
 
     users = list_users_from_supabase()
@@ -3446,7 +3450,7 @@ def render_admin_auditoria_backup() -> None:
     st.info("Esta pantalla permite revisar acciones recientes y exportar una copia administrativa de las tablas principales.")
 
     if not supabase_available():
-        st.warning("Supabase no está configurado. No se puede consultar auditoría ni generar backup.")
+        st.warning("La Base de Datos no está configurada. No se puede consultar auditoría ni generar backup.")
         return
 
     st.markdown("### Auditoría reciente")
@@ -3527,7 +3531,7 @@ def page_portal_externo() -> None:
     st.info("Este portal muestra únicamente la publicación vigente. Las versiones históricas solo están disponibles para el administrador.")
 
     if not supabase_available():
-        st.warning("Supabase no está configurado. No se puede consultar la publicación vigente.")
+        st.warning("La Base de Datos no está configurada. No se puede consultar la publicación vigente.")
         return
 
     pub = get_publicacion_vigente()
@@ -3570,7 +3574,7 @@ def render_admin_calidad_datos() -> None:
     )
 
     if not supabase_available():
-        st.warning("Supabase no está configurado. No se pueden generar validaciones de calidad.")
+        st.warning("La Base de Datos no está configurada. No se pueden generar validaciones de calidad.")
         return
 
     ok, msg, quality = build_quality_from_supabase()
@@ -3624,6 +3628,33 @@ def render_admin_calidad_datos() -> None:
         audit_event("revision_calidad_datos", "Revisión manual de calidad ejecutada desde panel admin")
         st.success("Revisión registrada en auditoría.")
 
+def render_admin_historial_versiones() -> None:
+    st.subheader("Historial de versiones")
+    st.caption("Información visible solo para usuarios administradores.")
+    versiones = [
+        ("DCD 1.0", "MVP inicial con contraseña, instrucciones, selección de centro docente, selectores dependientes y preparación para Base de Datos."),
+        ("DCD 1.0.1", "Pantalla de recordatorio, correo automático opcional, usuarios configurables, auditoría y revisión de mapeo."),
+        ("DCD 1.0.2", "Ajuste de áreas: Hospital, Atención Familiar y Comunitaria, y retirada de Otras Unidades Docentes."),
+        ("DCD 1.0.3", "Cierre estable: exportación más completa, estado finalizado y bloqueo suave de edición."),
+        ("DCD 1.0.4", "Totales en Matriz_DCD y panel administrador para Excel consolidado desde Base de Datos."),
+        ("DCD 1.0.5", "Usuarios por centro docente, contraseñas hasheadas, reset por admin y borradores filtrados."),
+        ("DCD 1.0.5.1", "Corrección del selector de centro docente al crear usuarios."),
+        ("DCD 1.0.6", "Guardado versionado, control de centros pendientes y cambio visible a Centros Docentes."),
+        ("DCD 1.0.7", "Publicaciones oficiales: PDF Matriz_DCD, histórico/vigente, Storage y notificación al administrador."),
+        ("DCD 1.0.8", "Dashboard y análisis de publicación: resúmenes por provincia, isla, centro, rama, nivel y titulaciones."),
+        ("DCD 1.0.8.1", "Cierre configurable: fecha tope, modos de cierre, avisos previos y publicación automática por vencimiento si procede."),
+        ("DCD 1.0.8.2", "Refuerzo de evaluación de cierre al acceder cualquier usuario, al finalizar centros y desde botón admin."),
+        ("DCD 1.0.9", "Portal externo de consulta de publicación vigente con dashboard y descargas limitadas."),
+        ("DCD 1.0.9.1", "Ajustes de interfaz del portal y mantenimiento avanzado de usuarios."),
+        ("DCD 1.1.0", "Mejora visual del dashboard, tarjetas compactas y PDF preparado para logo/frase institucional."),
+        ("DCD 1.1.1", "Auditoría ampliada, registro de accesos/descargas y backup completo admin."),
+        ("DCD 1.1.1.1", "Corrección de políticas RLS de auditoría y diagnóstico manual de eventos."),
+        ("DCD 1.1.2", "Calidad de datos: avisos, validaciones, valores atípicos y comparativa entre publicaciones."),
+        ("DCD 1.1.2.1", "Pulido de interfaz, ocultación de historial en login y lenguaje no técnico para usuarios."),
+    ]
+    df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
+    st.dataframe(df_versiones, use_container_width=True, hide_index=True)
+
 def page_admin_consolidado() -> None:
     st.header("Panel administrador")
 
@@ -3634,7 +3665,7 @@ def page_admin_consolidado() -> None:
             st.rerun()
         return
 
-    tab_consolidado, tab_publicaciones, tab_cierre, tab_calidad, tab_usuarios, tab_auditoria = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Calidad de datos", "Usuarios", "Auditoría/Backup"])
+    tab_consolidado, tab_publicaciones, tab_cierre, tab_calidad, tab_usuarios, tab_auditoria, tab_historial = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Calidad de datos", "Usuarios", "Auditoría/Backup", "Historial versiones"])
     with tab_consolidado:
         render_admin_consolidado()
     with tab_publicaciones:
@@ -3647,6 +3678,8 @@ def page_admin_consolidado() -> None:
         render_admin_usuarios()
     with tab_auditoria:
         render_admin_auditoria_backup()
+    with tab_historial:
+        render_admin_historial_versiones()
 
     st.markdown("---")
     if st.button("Volver al aplicativo"):
