@@ -1,6 +1,17 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.1.2.3)
+# DATOS CAPACIDAD DOCENTE (DCD 1.1.3)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
+## Autoría del proyecto
+
+- **Desarrollador / creador del programa:** Alberto Cabrera
+- **Responsable funcional del proyecto:** Alberto Cabrera
+- **Desarrollado para:** F.S.E. – S.C.S.
+- **Proyecto:** DATOS CAPACIDAD DOCENTE (DCD)
+- **Versión estable:** DCD 1.1.3
+- **Año:** 2026
+
+La autoría funcional y de desarrollo queda identificada en `app.py`, `README.md`, `AUTHORSHIP.md`, `CHANGELOG.md` y en la huella SHA256 del paquete de distribución.
+
 
 Esta versión parte de la DCD 1.0 y añade:
 
@@ -39,6 +50,10 @@ dcd_capacidad_docente/
 ├── app.py
 ├── requirements.txt
 ├── README.md
+├── AUTHORS.md
+├── AUTHORSHIP.md
+├── CHANGELOG.md
+├── RELEASE_NOTES.md
 ├── .gitignore
 ├── .streamlit/
 │   └── secrets.toml.example

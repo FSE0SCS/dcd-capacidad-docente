@@ -1,3 +1,18 @@
+# ============================================================
+# DATOS CAPACIDAD DOCENTE (DCD)
+# Aplicativo desarrollado para la gestión y análisis de los Datos
+# de Capacidad Docente del Servicio Canario de la Salud.
+#
+# Desarrollador / creador del programa: Alberto Cabrera
+# Responsable funcional del proyecto: Alberto Cabrera
+# Versión: DCD 1.1.3
+# Año: 2026
+#
+# Nota de autoría:
+# Este bloque identifica la autoría funcional y de desarrollo del
+# aplicativo. Debe mantenerse en las versiones derivadas del proyecto.
+# ============================================================
+
 import io
 import hashlib
 import json
@@ -37,8 +52,12 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.2.3"
+APP_VERSION = "DCD 1.1.3"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
+APP_AUTHOR = "Alberto Cabrera"
+APP_CREATOR = "Alberto Cabrera"
+APP_DEVELOPED_FOR = "F.S.E. – S.C.S."
+APP_BUILD_ID = "DCD-2026-FSE-SCS"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
 ASSETS_DIR = Path(__file__).parent / "assets"
@@ -2543,7 +2562,9 @@ def app_sidebar() -> None:
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ℹ️ Información")
     st.sidebar.write(f"Versión: {APP_VERSION}")
-    st.sidebar.write("Desarrollado para: F.S.E. – S.C.S.")
+    st.sidebar.write(f"Desarrollado para: {APP_DEVELOPED_FOR}")
+    if st.session_state.get("current_user_role") == "admin":
+        st.sidebar.caption(f"Desarrollador / creador: {APP_AUTHOR}")
     if st.session_state.get("current_user_display"):
         st.sidebar.write(f"Usuario: {st.session_state.current_user_display}")
         st.sidebar.caption(f"Rol: {st.session_state.get('current_user_role', '')}")
@@ -3719,6 +3740,7 @@ def render_admin_calidad_datos() -> None:
 def render_admin_historial_versiones() -> None:
     st.subheader("Historial de versiones")
     st.caption("Información visible solo para usuarios administradores.")
+    st.info(f"Desarrollador / creador del programa: {APP_AUTHOR}. Responsable funcional del proyecto: {APP_CREATOR}.")
     versiones = [
         ("DCD 1.0", "MVP inicial con contraseña, instrucciones, selección de centro docente, selectores dependientes y preparación para Base de Datos."),
         ("DCD 1.0.1", "Pantalla de recordatorio, correo automático opcional, usuarios configurables, auditoría y revisión de mapeo."),
@@ -3741,6 +3763,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.2.1", "Pulido de interfaz, ocultación de historial en login y lenguaje no técnico para usuarios."),
         ("DCD 1.1.2.2", "Ajustes finales de PDF: logo, frase institucional, pie de firma y numeración de páginas."),
         ("DCD 1.1.2.3", "Excel limitado para usuarios de consulta y ajuste de logo superior derecho en PDF."),
+        ("DCD 1.1.3", "Cierre documental y formalización de autoría: cabecera de código, README, CHANGELOG, AUTHORSHIP y huella SHA256 del paquete."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
