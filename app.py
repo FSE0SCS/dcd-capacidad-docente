@@ -37,7 +37,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.2.2"
+APP_VERSION = "DCD 1.1.2.3"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
@@ -45,6 +45,20 @@ ASSETS_DIR = Path(__file__).parent / "assets"
 LOGO_PATH = ASSETS_DIR / "logo.png"
 INSTITUTIONAL_PHRASE = "Informe desarrollado para la gestión y análisis de los Datos de Capacidad Docente del Servicio Canario de la Salud."
 SIGNATURE_FOOTER = "Jefatura del Servicio de Formacion Sanitaria Especializada"
+
+CONSULTA_EXCEL_SHEETS = [
+    "Dashboard",
+    "Resumen_Global",
+    "Resumen_Provincia",
+    "Resumen_Isla",
+    "Resumen_Centro",
+    "Resumen_Rama",
+    "Resumen_Nivel",
+    "Resumen_Centro_Rama",
+    "Resumen_Centro_Nivel",
+    "Top_Titulaciones",
+    "Matriz_DCD",
+]
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -1532,9 +1546,23 @@ def add_pdf_table(story: list, title: str, df: pd.DataFrame, styles, max_rows: i
     story.append(Spacer(1, 8))
 
 def draw_pdf_footer(canvas, doc):
-    """Pie de página común en los informes PDF publicados."""
+    """Cabecera y pie de página común en los informes PDF publicados."""
     canvas.saveState()
-    width, _height = landscape(A3)
+    width, height = landscape(A3)
+    if LOGO_PATH.exists():
+        try:
+            # Logo superior derecho, ligeramente más pequeño que en versiones anteriores.
+            canvas.drawImage(
+                str(LOGO_PATH),
+                width - doc.rightMargin - 72,
+                height - 30,
+                width=72,
+                height=24,
+                preserveAspectRatio=True,
+                mask="auto",
+            )
+        except Exception:
+            pass
     footer_y = 12
     canvas.setStrokeColor(colors.HexColor("#BFBFBF"))
     canvas.setLineWidth(0.4)
@@ -1557,17 +1585,11 @@ def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[
         pagesize=landscape(A3),
         leftMargin=18,
         rightMargin=18,
-        topMargin=18,
+        topMargin=34,
         bottomMargin=28,
     )
     styles = getSampleStyleSheet()
     story = []
-    if Image is not None and LOGO_PATH.exists():
-        try:
-            story.append(Image(str(LOGO_PATH), width=120, height=60, kind="proportional"))
-            story.append(Spacer(1, 6))
-        except Exception:
-            pass
     story.append(Paragraph(titulo, styles["Title"]))
     story.append(Paragraph(INSTITUTIONAL_PHRASE, styles["Normal"]))
     story.append(Spacer(1, 6))
@@ -2176,6 +2198,51 @@ def render_publication_metadata(pub: dict) -> None:
     st.caption(f"Tipo: {pub.get('tipo_publicacion', '')} | Motivo: {pub.get('motivo_publicacion', '')}")
 
 
+def filter_excel_for_consulta(excel_bytes: bytes) -> bytes:
+    """Devuelve una copia del Excel solo con las hojas permitidas para usuarios de consulta."""
+    try:
+        xls = pd.ExcelFile(io.BytesIO(excel_bytes))
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            written = False
+            for sheet_name in CONSULTA_EXCEL_SHEETS:
+                if sheet_name in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name=sheet_name)
+                    safe_sheet = sheet_name[:31]
+                    df.to_excel(writer, sheet_name=safe_sheet, index=False)
+                    worksheet = writer.sheets[safe_sheet]
+                    workbook = writer.book
+                    header_format = workbook.add_format({
+                        "bold": True,
+                        "bg_color": "#1F4E78",
+                        "font_color": "#FFFFFF",
+                        "border": 1,
+                        "align": "center",
+                        "valign": "vcenter",
+                    })
+                    for col_idx, col_name in enumerate(df.columns):
+                        worksheet.write(0, col_idx, col_name, header_format)
+                        try:
+                            sample = df[col_name].head(200).fillna("").astype(str).tolist()
+                        except Exception:
+                            sample = []
+                        max_len = max([len(str(col_name))] + [len(x) for x in sample]) if len(df.columns) else 12
+                        worksheet.set_column(col_idx, col_idx, min(max(max_len + 2, 12), 45))
+                    worksheet.freeze_panes(1, 0)
+                    if not df.empty and len(df.columns) > 0:
+                        worksheet.autofilter(0, 0, len(df), len(df.columns) - 1)
+                    written = True
+            if not written:
+                # Fallback defensivo: si no hay hojas analíticas, se entrega la primera hoja para no romper la descarga.
+                first = xls.sheet_names[0]
+                pd.read_excel(xls, sheet_name=first).to_excel(writer, sheet_name=first[:31], index=False)
+        output.seek(0)
+        return output.getvalue()
+    except Exception:
+        # Si el filtrado fallara por cualquier motivo, devolvemos el archivo original para no bloquear la consulta.
+        return excel_bytes
+
+
 def render_publication_downloads(pub: dict, prefix: str = "portal") -> None:
     c1, c2 = st.columns(2)
     with c1:
@@ -2197,10 +2264,15 @@ def render_publication_downloads(pub: dict, prefix: str = "portal") -> None:
         if st.button("Preparar Excel", key=f"{prefix}_prepare_excel"):
             ok, data, msg = download_publication_file(pub.get("ruta_excel", ""))
             if ok and data:
+                excel_data = data
+                excel_filename = f"{pub.get('codigo_publicacion', 'DCD')}.xlsx"
+                if is_consulta_user():
+                    excel_data = filter_excel_for_consulta(data)
+                    excel_filename = f"{pub.get('codigo_publicacion', 'DCD')}_consulta.xlsx"
                 st.download_button(
                     "Descargar Excel consolidado",
-                    data=data,
-                    file_name=f"{pub.get('codigo_publicacion', 'DCD')}.xlsx",
+                    data=excel_data,
+                    file_name=excel_filename,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"{prefix}_download_excel",
                     on_click=audit_event,
@@ -3668,6 +3740,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.2", "Calidad de datos: avisos, validaciones, valores atípicos y comparativa entre publicaciones."),
         ("DCD 1.1.2.1", "Pulido de interfaz, ocultación de historial en login y lenguaje no técnico para usuarios."),
         ("DCD 1.1.2.2", "Ajustes finales de PDF: logo, frase institucional, pie de firma y numeración de páginas."),
+        ("DCD 1.1.2.3", "Excel limitado para usuarios de consulta y ajuste de logo superior derecho en PDF."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)

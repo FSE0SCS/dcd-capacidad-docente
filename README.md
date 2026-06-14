@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.1.2.2)
+# DATOS CAPACIDAD DOCENTE (DCD 1.1.2.3)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 
@@ -369,7 +369,7 @@ Esta versión incorpora ajustes de presentación y lenguaje de usuario:
 No requiere SQL nuevo respecto a DCD 1.1.2.
 
 
-## 23. DCD 1.1.2.2 - Ajuste final PDF
+## 23. DCD 1.1.2.3 - Ajuste final PDF
 
 Versión de pulido del informe PDF publicado.
 
