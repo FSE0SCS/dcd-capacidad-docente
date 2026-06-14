@@ -393,3 +393,46 @@ create policy "DCD configuracion delete"
 on public.dcd_configuracion
 for delete
 using (true);
+
+-- DCD 1.1.3.1 - Corrección GAP TF
+-- Normaliza los centros históricos GAP TF Norte / GAP TF Sur al único centro válido GAP TF.
+-- La matriz oficial ya utiliza una sola columna: GAP TF.
+
+update public.dcd_usuarios
+set unidad_docente = 'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE',
+    codigo_unidad = 'GAPTF',
+    updated_at = now()
+where unidad_docente in (
+    'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE',
+    'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR'
+);
+
+update public.dcd_borradores
+set unidad_docente = 'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE',
+    codigo_unidad = 'GAPTF',
+    updated_at = now()
+where unidad_docente in (
+    'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE',
+    'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR'
+);
+
+update public.dcd_registros
+set unidad_docente = 'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE',
+    codigo_unidad = 'GAPTF',
+    columna_excel = 'GAP TF',
+    updated_at = now()
+where unidad_docente in (
+    'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE',
+    'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR'
+);
+
+update public.dcd_auditoria
+set unidad_docente = 'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE'
+where unidad_docente in (
+    'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE',
+    'GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR'
+);
+
+update public.dcd_usuarios
+set display_name = 'GAP TF'
+where display_name in ('GAP TF Norte', 'GAP TF Sur', 'GAPTF Norte', 'GAPTF Sur');

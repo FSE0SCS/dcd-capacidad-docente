@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.1.3)
+# DATOS CAPACIDAD DOCENTE (DCD 1.1.3.1)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 ## Autoría del proyecto
@@ -7,7 +7,7 @@ Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel 
 - **Responsable funcional del proyecto:** Alberto Cabrera
 - **Desarrollado para:** F.S.E. – S.C.S.
 - **Proyecto:** DATOS CAPACIDAD DOCENTE (DCD)
-- **Versión estable:** DCD 1.1.3
+- **Versión estable:** DCD 1.1.3.1
 - **Año:** 2026
 
 La autoría funcional y de desarrollo queda identificada en `app.py`, `README.md`, `AUTHORSHIP.md`, `CHANGELOG.md` y en la huella SHA256 del paquete de distribución.
@@ -396,3 +396,15 @@ Incluye:
 - Pie de firma: “Jefatura del Servicio de Formacion Sanitaria Especializada”.
 
 No requiere SQL nuevo respecto a DCD 1.1.2.1.
+
+
+## 24. DCD 1.1.3.1 - Corrección GAP TF
+
+Esta versión corrige la definición del centro docente de Atención Primaria de Tenerife.
+
+- Se elimina la separación errónea entre GAP TF Norte y GAP TF Sur.
+- Se mantiene un único centro docente: GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE.
+- El centro queda vinculado a la columna oficial GAP TF de la Matriz_DCD.
+- Se incorpora migración SQL para normalizar usuarios, borradores, registros y auditoría históricos que pudieran contener los nombres antiguos.
+
+Esta versión requiere ejecutar el `supabase/schema.sql` actualizado.

@@ -9,7 +9,7 @@
 - **Desarrollador / creador del programa:** Alberto Cabrera
 - **Responsable funcional del proyecto:** Alberto Cabrera
 - **Desarrollado para:** F.S.E. – S.C.S.
-- **Versión de cierre documental:** DCD 1.1.3
+- **Versión de cierre documental:** DCD 1.1.3.1
 - **Año:** 2026
 
 ## Elementos de trazabilidad

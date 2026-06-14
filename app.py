@@ -52,7 +52,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.3"
+APP_VERSION = "DCD 1.1.3.1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -104,8 +104,7 @@ DIRECCIONES_POR_AREA = {
     ],
     "ATENCION FAMILIAR Y COMUNITARIA": [
         "GERENCIA DE ATENCIÓN PRIMARIA DE GRAN CANARIA",
-        "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE",
-        "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR",
+        "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE",
         "GERENCIA DE SERVICIOS SANITARIOS DE FUERTEVENTURA",
         "GERENCIA DE SERVICIOS SANITARIOS DE LANZAROTE",
         "GERENCIA DE SERVICIOS SANITARIOS DE LA PALMA",
@@ -119,14 +118,21 @@ LEGACY_AREA_MAP = {
     "UNIDAD DOCENTE MULTIPROFESIONAL DE ATENCION FAMILIAR Y COMUNITARIA": "ATENCION FAMILIAR Y COMUNITARIA",
 }
 
+# Compatibilidad histórica: en versiones anteriores aparecían dos centros para GAP Tenerife.
+# La matriz oficial solo tiene una columna GAP TF, por lo que ambos nombres antiguos
+# se normalizan al único centro válido.
+LEGACY_UNIDAD_DOCENTE_MAP = {
+    "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE": "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE",
+    "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR": "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE",
+}
+
 CODIGOS_DIRECCION = {
     "DIRECCIÓN GERENCIA HOSPITAL DOCTOR NEGRIN": "HUGCNEGRIN",
     "DIRECCIÓN GERENCIA COMPLEJO HOSPITALARIO UNIVERSITARIO Y MATERNO INFANTIL": "CHUIMI",
     "DIRECCIÓN GERENCIA COMPLEJO HOSPITALARIO UNIVERSITARIO DE CANARIAS": "CHUC",
     "DIRECCIÓN GERENCIA HOSPITAL NUESTRA SEÑORA DE CANDELARIA": "HUNSC",
     "GERENCIA DE ATENCIÓN PRIMARIA DE GRAN CANARIA": "GAPGC",
-    "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE": "GAPTF_NORTE",
-    "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR": "GAPTF_SUR",
+    "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE": "GAPTF",
     "GERENCIA DE SERVICIOS SANITARIOS DE FUERTEVENTURA": "GSSFV",
     "GERENCIA DE SERVICIOS SANITARIOS DE LANZAROTE": "GSSLZ",
     "GERENCIA DE SERVICIOS SANITARIOS DE LA PALMA": "GSSLP",
@@ -151,8 +157,7 @@ COLUMNA_EXCEL_POR_DIRECCION = {
     "DIRECCIÓN GERENCIA COMPLEJO HOSPITALARIO UNIVERSITARIO DE CANARIAS": "CHUC",
     "DIRECCIÓN GERENCIA HOSPITAL NUESTRA SEÑORA DE CANDELARIA": "HUNSC",
     "GERENCIA DE ATENCIÓN PRIMARIA DE GRAN CANARIA": "GAP GC",
-    "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE NORTE": "GAP TF",
-    "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE SUR": "GAP TF",
+    "GERENCIA DE ATENCIÓN PRIMARIA DE TENERIFE": "GAP TF",
     "GERENCIA DE SERVICIOS SANITARIOS DE FUERTEVENTURA": "GSS FV",
     "GERENCIA DE SERVICIOS SANITARIOS DE LANZAROTE": "GSS LZ",
     "GERENCIA DE SERVICIOS SANITARIOS DE LA PALMA": "GSS LP",
@@ -263,6 +268,10 @@ def normalizar_area(area: str) -> str:
     return LEGACY_AREA_MAP.get(area, area)
 
 
+def normalizar_unidad_docente(unidad_docente: str) -> str:
+    return LEGACY_UNIDAD_DOCENTE_MAP.get(unidad_docente, unidad_docente)
+
+
 def reset_downstream(level: str) -> None:
     if level == "nivel_i":
         st.session_state.sel_nivel_ii = ""
@@ -284,6 +293,7 @@ def safe_code(text: str) -> str:
 
 
 def build_codigo_borrador(unidad_docente: str) -> str:
+    unidad_docente = normalizar_unidad_docente(unidad_docente)
     codigo_unidad = CODIGOS_DIRECCION.get(unidad_docente) or safe_code(unidad_docente)
     return f"DCD-{codigo_unidad}-2026"
 
@@ -441,7 +451,7 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
         st.session_state.current_user_role = str(db_user.get("role", "usuario"))
         st.session_state.current_user_display = str(db_user.get("display_name", username))
         st.session_state.current_user_area = normalizar_area(str(db_user.get("area", "") or ""))
-        st.session_state.current_user_unidad = str(db_user.get("unidad_docente", "") or "")
+        st.session_state.current_user_unidad = normalizar_unidad_docente(str(db_user.get("unidad_docente", "") or ""))
         st.session_state.current_user_codigo_unidad = str(db_user.get("codigo_unidad", "") or "")
         st.session_state.must_change_password = bool(db_user.get("must_change_password", False))
         return True, "Acceso correcto."
@@ -460,7 +470,7 @@ def login_user(username: str, password: str) -> tuple[bool, str]:
     st.session_state.current_user_role = str(user_data.get("role", "usuario"))
     st.session_state.current_user_display = str(user_data.get("display_name", username))
     st.session_state.current_user_area = normalizar_area(str(user_data.get("area", "") or ""))
-    st.session_state.current_user_unidad = str(user_data.get("unidad_docente", "") or "")
+    st.session_state.current_user_unidad = normalizar_unidad_docente(str(user_data.get("unidad_docente", "") or ""))
     st.session_state.current_user_codigo_unidad = str(user_data.get("codigo_unidad", "") or "")
     st.session_state.must_change_password = False
     return True, "Acceso correcto."
@@ -697,7 +707,7 @@ def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
         rows = getattr(registros_resp, "data", []) or []
 
         st.session_state.area_selected = normalizar_area(borrador.get("area", ""))
-        st.session_state.direccion_selected = borrador.get("unidad_docente", "")
+        st.session_state.direccion_selected = normalizar_unidad_docente(borrador.get("unidad_docente", ""))
         st.session_state.codigo_borrador = codigo_borrador
         st.session_state.codigo_expediente = borrador.get("codigo_expediente") or build_codigo_borrador(st.session_state.direccion_selected)
         st.session_state.version_num = int(borrador.get("version_num") or 1)
@@ -3764,6 +3774,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.2.2", "Ajustes finales de PDF: logo, frase institucional, pie de firma y numeración de páginas."),
         ("DCD 1.1.2.3", "Excel limitado para usuarios de consulta y ajuste de logo superior derecho en PDF."),
         ("DCD 1.1.3", "Cierre documental y formalización de autoría: cabecera de código, README, CHANGELOG, AUTHORSHIP y huella SHA256 del paquete."),
+        ("DCD 1.1.3.1", "Corrección GAP TF: centro docente único para Atención Primaria de Tenerife."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
