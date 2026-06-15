@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.1.3
+# Versión: DCD 1.1.3.2
 # Año: 2026
 #
 # Nota de autoría:
@@ -52,7 +52,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.3.1"
+APP_VERSION = "DCD 1.1.3.2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -398,6 +398,11 @@ def is_admin() -> bool:
 def is_external_viewer() -> bool:
     """Usuarios de consulta externa: solo pueden ver la publicación vigente."""
     return st.session_state.get("current_user_role") in {"consulta", "externo", "entidad_externa"}
+
+
+def is_consulta_user() -> bool:
+    """Compatibilidad para descargas limitadas del rol consulta/visor externo."""
+    return is_external_viewer()
 
 
 def user_scope_unidad() -> str:
@@ -3775,6 +3780,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.2.3", "Excel limitado para usuarios de consulta y ajuste de logo superior derecho en PDF."),
         ("DCD 1.1.3", "Cierre documental y formalización de autoría: cabecera de código, README, CHANGELOG, AUTHORSHIP y huella SHA256 del paquete."),
         ("DCD 1.1.3.1", "Corrección GAP TF: centro docente único para Atención Primaria de Tenerife."),
+        ("DCD 1.1.3.2", "Corrección rol consulta: preparación de Excel limitado sin error NameError."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
