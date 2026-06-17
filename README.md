@@ -421,3 +421,7 @@ Esta versión requiere ejecutar el `supabase/schema.sql` actualizado.
 
 - Mapa visual de Canarias en el dashboard del rol consulta con totales de capacidad docente por isla.
 - Cambio exclusivamente visual, sin modificación de base de datos ni cálculos base.
+
+
+### DCD 1.1.3.5
+Corrección visual y de presentación para rol consulta: PDF de consulta sin calidad interna, sin filas con total 0 y mapa territorial ajustado.

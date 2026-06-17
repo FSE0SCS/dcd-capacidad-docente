@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.1.3.4
+# Versión: DCD 1.1.3.5
 # Año: 2026
 #
 # Nota de autoría:
@@ -53,7 +53,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.3.4"
+APP_VERSION = "DCD 1.1.3.5"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -1153,6 +1153,10 @@ def send_missing_centros_email(missing: list[str], status_df: pd.DataFrame) -> t
 def calcular_totales_matriz_df(matriz: pd.DataFrame) -> pd.DataFrame:
     """Devuelve una copia de Matriz_DCD con columnas derivadas calculadas y fila TOTAL."""
     out = matriz.copy()
+    # Seguridad: si la matriz procede de un Excel ya publicado, puede traer una fila TOTAL.
+    # La retiramos antes de recalcular para evitar duplicar/sumar dos veces el total.
+    if "Titulación" in out.columns:
+        out = out[out["Titulación"].astype(str).str.upper().str.strip() != "TOTAL"].copy()
     for col in MATRIX_VALUE_COLUMNS:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0).astype(int)
@@ -1584,14 +1588,15 @@ def render_canarias_capacity_map(analytics: dict[str, pd.DataFrame]) -> None:
         valores[isla] = valor
 
     # Coordenadas en porcentaje sobre la imagen base mapa_canarias.png (1600 x 912).
+    # Ajustadas sobre la imagen completa, sin recorte, para que etiqueta y punto queden alineados.
     puntos = [
-        {"isla": "La Palma", "x": 6.5, "y": 25.5, "dot_x": 18.0, "dot_y": 27.8},
-        {"isla": "Tenerife", "x": 37.5, "y": 27.5, "dot_x": 41.5, "dot_y": 40.5},
-        {"isla": "La Gomera", "x": 23.5, "y": 45.0, "dot_x": 28.0, "dot_y": 56.0},
-        {"isla": "El Hierro", "x": 6.5, "y": 64.0, "dot_x": 19.0, "dot_y": 67.5},
-        {"isla": "Gran Canaria", "x": 50.5, "y": 66.5, "dot_x": 55.0, "dot_y": 65.5},
-        {"isla": "Fuerteventura", "x": 82.5, "y": 42.5, "dot_x": 78.8, "dot_y": 44.5},
-        {"isla": "Lanzarote", "x": 88.5, "y": 25.0, "dot_x": 84.0, "dot_y": 28.5},
+        {"isla": "La Palma", "x": 12.0, "y": 32.0, "dot_x": 12.2, "dot_y": 43.5},
+        {"isla": "Tenerife", "x": 38.0, "y": 40.0, "dot_x": 39.0, "dot_y": 54.5},
+        {"isla": "La Gomera", "x": 24.0, "y": 47.0, "dot_x": 24.8, "dot_y": 57.0},
+        {"isla": "El Hierro", "x": 9.0, "y": 72.0, "dot_x": 9.5, "dot_y": 82.0},
+        {"isla": "Gran Canaria", "x": 55.0, "y": 61.5, "dot_x": 55.0, "dot_y": 71.5},
+        {"isla": "Fuerteventura", "x": 80.0, "y": 38.0, "dot_x": 80.2, "dot_y": 51.0},
+        {"isla": "Lanzarote", "x": 91.0, "y": 18.5, "dot_x": 91.2, "dot_y": 27.0},
     ]
 
     try:
@@ -1654,15 +1659,16 @@ def render_canarias_capacity_map(analytics: dict[str, pd.DataFrame]) -> None:
         .map-wrap {{
             position: relative;
             width: 100%;
-            aspect-ratio: 1600 / 670;
+            aspect-ratio: 1600 / 912;
             overflow: hidden;
         }}
         .map-img {{
             position: absolute;
             left: 0;
-            top: -9%;
+            top: 0;
             width: 100%;
-            height: auto;
+            height: 100%;
+            object-fit: contain;
             opacity: 0.92;
             pointer-events: none;
         }}
@@ -1693,6 +1699,7 @@ def render_canarias_capacity_map(analytics: dict[str, pd.DataFrame]) -> None:
         }}
         .map-dot {{
             position: absolute;
+            transform: translate(-50%, -50%);
             width: 8px;
             height: 8px;
             border-radius: 50%;
@@ -1746,7 +1753,7 @@ def render_canarias_capacity_map(analytics: dict[str, pd.DataFrame]) -> None:
         }}
     </style>
     """
-    components.html(html, height=640, scrolling=False)
+    components.html(html, height=780, scrolling=False)
 
 def render_streamlit_dashboard(analytics: dict[str, pd.DataFrame]) -> None:
     global_df = analytics.get("Resumen_Global", pd.DataFrame())
@@ -1802,8 +1809,11 @@ def build_dashboard_text(analytics: dict[str, pd.DataFrame]) -> list[str]:
 def add_pdf_table(story: list, title: str, df: pd.DataFrame, styles, max_rows: int = 20) -> None:
     if df is None or df.empty:
         return
-    story.append(Paragraph(title, styles["Heading2"]))
     show = filtrar_resumen_total_plazas_positivo(df).head(max_rows).copy().fillna("")
+    # Si tras filtrar quedan solo filas con total 0, no se muestra ni el título ni la tabla.
+    if show.empty:
+        return
+    story.append(Paragraph(title, styles["Heading2"]))
     data = [list(show.columns)] + show.astype(str).values.tolist()
     table = Table(data, repeatRows=1)
     table.setStyle(TableStyle([
@@ -1847,7 +1857,13 @@ def draw_pdf_footer(canvas, doc):
     canvas.restoreState()
 
 
-def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[str], analytics: dict[str, pd.DataFrame] | None = None) -> bytes:
+def generate_matriz_pdf(
+    matriz: pd.DataFrame,
+    titulo: str,
+    resumen_lineas: list[str],
+    analytics: dict[str, pd.DataFrame] | None = None,
+    include_quality: bool = True,
+) -> bytes:
     if SimpleDocTemplate is None or Table is None:
         raise RuntimeError("La librería reportlab no está instalada. Añada reportlab a requirements.txt y reinicie la app.")
 
@@ -1880,7 +1896,7 @@ def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[
         add_pdf_table(story, "Top centros docentes / columnas", analytics.get("Resumen_Centro", pd.DataFrame()), styles, max_rows=15)
         add_pdf_table(story, "Top ramas", analytics.get("Resumen_Rama", pd.DataFrame()), styles, max_rows=15)
         add_pdf_table(story, "Top titulaciones", analytics.get("Top_Titulaciones", pd.DataFrame()), styles, max_rows=15)
-        if "Calidad_Resumen" in analytics:
+        if include_quality and "Calidad_Resumen" in analytics:
             story.append(Spacer(1, 8))
             story.append(Paragraph("Validaciones de calidad de datos", styles["Heading1"]))
             add_pdf_table(story, "Resumen de controles", analytics.get("Calidad_Resumen", pd.DataFrame()), styles, max_rows=20)
@@ -2519,16 +2535,80 @@ def filter_excel_for_consulta(excel_bytes: bytes) -> bytes:
         return excel_bytes
 
 
+def build_consulta_pdf_from_publication(pub: dict) -> tuple[bool, bytes | None, str]:
+    """Genera un PDF específico para rol consulta desde el Excel vigente.
+
+    No usa el PDF administrativo almacenado porque este puede contener bloques
+    internos de calidad de datos. Este PDF es de presentación externa: sin calidad
+    y con filas/resúmenes de total 0 filtrados.
+    """
+    ruta_excel = (pub or {}).get("ruta_excel", "")
+    if not ruta_excel:
+        return False, None, "La publicación vigente no tiene Excel asociado."
+
+    ok, data, msg = download_publication_file(ruta_excel)
+    if not ok or not data:
+        return False, None, msg
+
+    try:
+        xls = pd.ExcelFile(io.BytesIO(data))
+        if "Matriz_DCD" not in xls.sheet_names:
+            return False, None, "El Excel publicado no contiene la hoja Matriz_DCD."
+
+        matriz = pd.read_excel(xls, sheet_name="Matriz_DCD")
+        if "Titulación" in matriz.columns:
+            matriz = matriz[matriz["Titulación"].astype(str).str.upper().str.strip() != "TOTAL"].copy()
+
+        analytics: dict[str, pd.DataFrame] = {}
+        for sheet in [
+            "Resumen_Global",
+            "Resumen_Provincia",
+            "Resumen_Isla",
+            "Resumen_Centro",
+            "Resumen_Rama",
+            "Resumen_Nivel",
+            "Resumen_Centro_Rama",
+            "Resumen_Centro_Nivel",
+            "Top_Titulaciones",
+        ]:
+            if sheet in xls.sheet_names:
+                df_sheet = pd.read_excel(xls, sheet_name=sheet)
+                if sheet != "Resumen_Global":
+                    df_sheet = filtrar_resumen_total_plazas_positivo(df_sheet)
+                analytics[sheet] = df_sheet
+
+        resumen_lineas = [
+            f"Publicación vigente: {pub.get('codigo_publicacion', '')}",
+            f"Fecha de publicación: {str(pub.get('fecha_publicacion', ''))[:19]}",
+            "Informe de consulta: se ocultan filas y resúmenes sin capacidad docente.",
+        ]
+        pdf = generate_matriz_pdf(
+            matriz,
+            titulo="DATOS CAPACIDAD DOCENTE (DCD) - Informe de consulta",
+            resumen_lineas=resumen_lineas,
+            analytics=analytics,
+            include_quality=False,
+        )
+        return True, pdf, "PDF de consulta generado."
+    except Exception as exc:
+        return False, None, f"Error al generar PDF de consulta: {exc}"
+
+
 def render_publication_downloads(pub: dict, prefix: str = "portal") -> None:
     c1, c2 = st.columns(2)
     with c1:
         if st.button("Preparar PDF", key=f"{prefix}_prepare_pdf"):
-            ok, data, msg = download_publication_file(pub.get("ruta_pdf", ""))
+            if is_consulta_user():
+                ok, data, msg = build_consulta_pdf_from_publication(pub)
+                pdf_filename = f"{pub.get('codigo_publicacion', 'DCD')}_consulta.pdf"
+            else:
+                ok, data, msg = download_publication_file(pub.get("ruta_pdf", ""))
+                pdf_filename = f"{pub.get('codigo_publicacion', 'DCD')}_Matriz_DCD.pdf"
             if ok and data:
                 st.download_button(
                     "Descargar PDF de informe",
                     data=data,
-                    file_name=f"{pub.get('codigo_publicacion', 'DCD')}_Matriz_DCD.pdf",
+                    file_name=pdf_filename,
                     mime="application/pdf",
                     key=f"{prefix}_download_pdf",
                     on_click=audit_event,
@@ -4027,6 +4107,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.3.2", "Corrección rol consulta: preparación de Excel limitado sin error NameError."),
         ("DCD 1.1.3.3", "Ajustes finales de visualización: mensaje de correo y ocultación de filas con total 0 en dashboard/PDF."),
         ("DCD 1.1.3.4", "Mapa visual de capacidad docente por isla en el dashboard del rol consulta."),
+        ("DCD 1.1.3.5", "Corrección PDF de consulta: sin calidad interna, sin filas total 0 y ajuste de coordenadas del mapa."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)

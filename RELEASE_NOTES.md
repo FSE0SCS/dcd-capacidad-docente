@@ -53,3 +53,7 @@ Después, reiniciar la app en Streamlit Cloud.
 - Confirmar que aparece el bloque “Visualización territorial”.
 - Confirmar que el mapa muestra los totales por isla.
 - Preparar Excel y PDF para comprobar que las descargas siguen funcionando.
+
+
+## DCD 1.1.3.5
+Versión correctiva de presentación para rol consulta: PDF limpio sin datos internos de calidad, ocultación de filas total 0 y mapa territorial ajustado.

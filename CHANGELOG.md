@@ -60,3 +60,9 @@
 - Guardado versionado.
 - Publicaciones oficiales.
 - Portal de consulta.
+
+
+## DCD 1.1.3.5
+- Corrección del PDF de consulta: se genera dinámicamente sin bloque interno de calidad de datos.
+- Se filtran filas y resúmenes con total 0 en el PDF de consulta.
+- Ajuste de coordenadas y proporciones del mapa de capacidad docente por isla.
