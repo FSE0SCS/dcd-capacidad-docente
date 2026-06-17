@@ -52,7 +52,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.3.2"
+APP_VERSION = "DCD 1.1.3.3"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -560,7 +560,7 @@ def send_email_with_mailgun(excel_bytes: bytes, filename: str) -> tuple[bool, st
         )
         if response.status_code == 200:
             audit_event("correo_enviado", f"Correo enviado a {recipient}", codigo)
-            return True, f"Correo enviado correctamente a {recipient}."
+            return True, "Correo enviado correctamente a servicio de FSE"
         return False, f"Error Mailgun {response.status_code}: {response.text}"
     except Exception as exc:
         return False, f"Error al enviar correo: {exc}"
@@ -1187,6 +1187,39 @@ def matriz_sin_total(matriz: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def filtrar_matriz_total_positivo(matriz: pd.DataFrame, mantener_fila_total: bool = False) -> pd.DataFrame:
+    """
+    Devuelve una copia calculada de Matriz_DCD sin filas de titulaciones con Total = 0.
+
+    Es un filtro solo de presentación para dashboard/PDF: no modifica registros,
+    borradores, publicaciones, cálculos de consolidación ni la matriz base.
+    """
+    df = calcular_totales_matriz_df(matriz)
+    if "Total" not in df.columns:
+        return df.reset_index(drop=True)
+
+    total_num = pd.to_numeric(df["Total"], errors="coerce").fillna(0)
+    is_total_row = pd.Series(False, index=df.index)
+    if "Titulación" in df.columns:
+        is_total_row = df["Titulación"].astype(str).str.upper().str.strip().eq("TOTAL")
+
+    mask = total_num > 0
+    if mantener_fila_total:
+        mask = mask | is_total_row
+    else:
+        mask = mask & ~is_total_row
+    return df[mask].reset_index(drop=True)
+
+
+def filtrar_resumen_total_plazas_positivo(df: pd.DataFrame) -> pd.DataFrame:
+    """Oculta filas analíticas con Total plazas = 0 para mejorar la visualización del portal de consulta."""
+    if df is None or df.empty or "Total plazas" not in df.columns:
+        return df
+    out = df.copy()
+    totals = pd.to_numeric(out["Total plazas"], errors="coerce").fillna(0)
+    return out[totals > 0].reset_index(drop=True)
+
+
 def suma_columnas(df: pd.DataFrame, columnas: list[str]) -> pd.Series:
     existentes = [c for c in columnas if c in df.columns]
     if not existentes:
@@ -1206,6 +1239,11 @@ def build_analytics_tables(matriz: pd.DataFrame, status_df: pd.DataFrame | None 
     for col in MATRIX_VALUE_COLUMNS:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    # Limpieza visual: las filas con Total = 0 no aportan capacidad docente
+    # y se ocultan en dashboard/PDF sin modificar la matriz oficial ni la base de datos.
+    if "Total" in df.columns:
+        df = df[pd.to_numeric(df["Total"], errors="coerce").fillna(0) > 0].reset_index(drop=True)
 
     total = total_columna(df, "Total")
     las_palmas = suma_columnas(df, PROVINCIA_COLUMNAS["Las Palmas"]).sum()
@@ -1534,17 +1572,23 @@ def render_streamlit_dashboard(analytics: dict[str, pd.DataFrame]) -> None:
         st.markdown("#### Por isla")
         isla = analytics.get("Resumen_Isla", pd.DataFrame())
         if not isla.empty:
+            isla = filtrar_resumen_total_plazas_positivo(isla)
+        if not isla.empty:
             st.bar_chart(isla.set_index("Isla")["Total plazas"])
             st.dataframe(isla, use_container_width=True, hide_index=True)
     with col_b:
         st.markdown("#### Por rama")
         rama = analytics.get("Resumen_Rama", pd.DataFrame())
         if not rama.empty:
+            rama = filtrar_resumen_total_plazas_positivo(rama)
+        if not rama.empty:
             st.bar_chart(rama.head(10).set_index("Rama")["Total plazas"])
             st.dataframe(rama.head(10), use_container_width=True, hide_index=True)
 
     st.markdown("#### Top titulaciones")
     top = analytics.get("Top_Titulaciones", pd.DataFrame())
+    if not top.empty:
+        top = filtrar_resumen_total_plazas_positivo(top)
     if not top.empty:
         st.dataframe(top.head(15), use_container_width=True, hide_index=True)
 
@@ -1564,7 +1608,7 @@ def add_pdf_table(story: list, title: str, df: pd.DataFrame, styles, max_rows: i
     if df is None or df.empty:
         return
     story.append(Paragraph(title, styles["Heading2"]))
-    show = df.head(max_rows).copy().fillna("")
+    show = filtrar_resumen_total_plazas_positivo(df).head(max_rows).copy().fillna("")
     data = [list(show.columns)] + show.astype(str).values.tolist()
     table = Table(data, repeatRows=1)
     table.setStyle(TableStyle([
@@ -1612,7 +1656,7 @@ def generate_matriz_pdf(matriz: pd.DataFrame, titulo: str, resumen_lineas: list[
     if SimpleDocTemplate is None or Table is None:
         raise RuntimeError("La librería reportlab no está instalada. Añada reportlab a requirements.txt y reinicie la app.")
 
-    matriz_pdf = calcular_totales_matriz_df(matriz)
+    matriz_pdf = filtrar_matriz_total_positivo(matriz, mantener_fila_total=True)
     output = io.BytesIO()
     doc = SimpleDocTemplate(
         output,
@@ -2199,7 +2243,10 @@ def load_analytics_from_publication_excel(pub: dict) -> tuple[bool, str, dict[st
         analytics: dict[str, pd.DataFrame] = {}
         for sheet in sheets:
             if sheet in xls.sheet_names:
-                analytics[sheet] = pd.read_excel(xls, sheet_name=sheet)
+                df_sheet = pd.read_excel(xls, sheet_name=sheet)
+                if sheet != "Resumen_Global":
+                    df_sheet = filtrar_resumen_total_plazas_positivo(df_sheet)
+                analytics[sheet] = df_sheet
         if "Resumen_Global" not in analytics:
             return False, "El Excel publicado no contiene hojas analíticas. Genere una nueva publicación con la versión actual.", None
         return True, "Analítica de publicación cargada.", analytics
@@ -3673,6 +3720,8 @@ def page_portal_externo() -> None:
         with st.expander("Ver tablas resumen completas"):
             for sheet_name in ["Resumen_Provincia", "Resumen_Isla", "Resumen_Centro", "Resumen_Rama", "Resumen_Nivel", "Top_Titulaciones"]:
                 df = analytics.get(sheet_name, pd.DataFrame())
+                if not df.empty:
+                    df = filtrar_resumen_total_plazas_positivo(df)
                 if not df.empty:
                     st.markdown(f"#### {sheet_name.replace('_', ' ')}")
                     st.dataframe(df, use_container_width=True, hide_index=True)
