@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.1.3.3)
+# DATOS CAPACIDAD DOCENTE (DCD 1.1.3.4)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 ## Autoría del proyecto
@@ -7,7 +7,7 @@ Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel 
 - **Responsable funcional del proyecto:** Alberto Cabrera
 - **Desarrollado para:** F.S.E. – S.C.S.
 - **Proyecto:** DATOS CAPACIDAD DOCENTE (DCD)
-- **Versión estable:** DCD 1.1.3.3
+- **Versión estable:** DCD 1.1.3.4
 - **Año:** 2026
 
 La autoría funcional y de desarrollo queda identificada en `app.py`, `README.md`, `AUTHORSHIP.md`, `CHANGELOG.md` y en la huella SHA256 del paquete de distribución.
@@ -410,8 +410,14 @@ Esta versión corrige la definición del centro docente de Atención Primaria de
 Esta versión requiere ejecutar el `supabase/schema.sql` actualizado.
 
 
-## DCD 1.1.3.3 — Ajustes finales de visualización
+## DCD 1.1.3.4 — Ajustes finales de visualización
 
 - Ajuste estético del mensaje de confirmación de correo automático: “Correo enviado correctamente a servicio de FSE”.
 - Limpieza visual del dashboard y del PDF publicado: las filas de Matriz_DCD con `Total = 0` se ocultan en la presentación para no ocupar espacio ni afear la lectura.
 - El filtro es solo de visualización: no borra registros, no modifica Supabase, no altera borradores ni cambia la matriz oficial almacenada.
+
+
+## DCD 1.1.3.4
+
+- Mapa visual de Canarias en el dashboard del rol consulta con totales de capacidad docente por isla.
+- Cambio exclusivamente visual, sin modificación de base de datos ni cálculos base.

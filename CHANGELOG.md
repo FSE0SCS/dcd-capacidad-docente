@@ -1,5 +1,11 @@
 # CHANGELOG — DATOS CAPACIDAD DOCENTE (DCD)
 
+## DCD 1.1.3.4
+
+- Incorporación de mapa visual de Canarias en el dashboard del rol consulta.
+- El mapa muestra la capacidad docente total por isla sobre imagen institucional limpia.
+- Cambio limitado a visualización: no modifica Supabase, publicaciones, Excel, PDF ni cálculos base.
+
 ## DCD 1.1.3.3
 
 - Ajuste del mensaje de confirmación del envío automático de correo para no mostrar la dirección técnica del destinatario.

@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.1.3.2
+# Versión: DCD 1.1.3.4
 # Año: 2026
 #
 # Nota de autoría:
@@ -14,6 +14,7 @@
 # ============================================================
 
 import io
+import base64
 import hashlib
 import json
 import re
@@ -52,7 +53,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.3.3"
+APP_VERSION = "DCD 1.1.3.4"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -62,6 +63,7 @@ DEFAULT_PASSWORD = "Capacidad2026"
 EXCEL_PATH = Path(__file__).parent / "data" / "listado_para_capacidad_docente.xlsx"
 ASSETS_DIR = Path(__file__).parent / "assets"
 LOGO_PATH = ASSETS_DIR / "logo.png"
+MAPA_CANARIAS_PATH = ASSETS_DIR / "mapa_canarias.png"
 INSTITUTIONAL_PHRASE = "Informe desarrollado para la gestión y análisis de los Datos de Capacidad Docente del Servicio Canario de la Salud."
 SIGNATURE_FOOTER = "Jefatura del Servicio de Formacion Sanitaria Especializada"
 
@@ -1558,6 +1560,194 @@ def compare_latest_publications() -> tuple[bool, str, dict[str, pd.DataFrame] | 
     except Exception as exc:
         return False, f"Error al comparar publicaciones: {exc}", None
 
+
+def render_canarias_capacity_map(analytics: dict[str, pd.DataFrame]) -> None:
+    """
+    Muestra un mapa visual de Canarias con la capacidad docente total por isla.
+
+    Es un bloque exclusivamente visual para el rol consulta. No modifica datos,
+    cálculos, publicaciones, Excel ni PDF.
+    """
+    isla_df = analytics.get("Resumen_Isla", pd.DataFrame())
+    if isla_df is None or isla_df.empty or "Isla" not in isla_df.columns or "Total plazas" not in isla_df.columns:
+        return
+    if not MAPA_CANARIAS_PATH.exists():
+        return
+
+    valores = {}
+    for _, row in isla_df.iterrows():
+        isla = str(row.get("Isla", "")).strip()
+        try:
+            valor = int(pd.to_numeric(row.get("Total plazas", 0), errors="coerce"))
+        except Exception:
+            valor = 0
+        valores[isla] = valor
+
+    # Coordenadas en porcentaje sobre la imagen base mapa_canarias.png (1600 x 912).
+    puntos = [
+        {"isla": "La Palma", "x": 6.5, "y": 25.5, "dot_x": 18.0, "dot_y": 27.8},
+        {"isla": "Tenerife", "x": 37.5, "y": 27.5, "dot_x": 41.5, "dot_y": 40.5},
+        {"isla": "La Gomera", "x": 23.5, "y": 45.0, "dot_x": 28.0, "dot_y": 56.0},
+        {"isla": "El Hierro", "x": 6.5, "y": 64.0, "dot_x": 19.0, "dot_y": 67.5},
+        {"isla": "Gran Canaria", "x": 50.5, "y": 66.5, "dot_x": 55.0, "dot_y": 65.5},
+        {"isla": "Fuerteventura", "x": 82.5, "y": 42.5, "dot_x": 78.8, "dot_y": 44.5},
+        {"isla": "Lanzarote", "x": 88.5, "y": 25.0, "dot_x": 84.0, "dot_y": 28.5},
+    ]
+
+    try:
+        encoded_map = base64.b64encode(MAPA_CANARIAS_PATH.read_bytes()).decode("utf-8")
+    except Exception:
+        return
+
+    labels_html = []
+    for punto in puntos:
+        isla = punto["isla"]
+        valor = valores.get(isla, 0)
+        labels_html.append(f"""
+            <div class="map-label" style="left:{punto['x']}%; top:{punto['y']}%;">
+                <div class="island-name">{isla}</div>
+                <div class="island-value">{valor}</div>
+            </div>
+            <div class="map-dot" style="left:{punto['dot_x']}%; top:{punto['dot_y']}%;"></div>
+        """)
+
+    legend_html = []
+    for isla in ["La Palma", "Tenerife", "Gran Canaria", "Fuerteventura", "Lanzarote", "La Gomera", "El Hierro"]:
+        legend_html.append(f"""
+            <div class="legend-item">
+                <span class="legend-dot"></span>
+                <span class="legend-name">{isla}</span>
+                <span class="legend-value">{valores.get(isla, 0)}</span>
+            </div>
+        """)
+
+    html = f"""
+    <div class="capacity-map-card">
+        <div class="capacity-map-title">Capacidad Docente por Isla</div>
+        <div class="map-wrap">
+            <img class="map-img" src="data:image/png;base64,{encoded_map}" />
+            {''.join(labels_html)}
+        </div>
+        <div class="legend-wrap">
+            {''.join(legend_html)}
+        </div>
+    </div>
+    <style>
+        .capacity-map-card {{
+            width: 100%;
+            box-sizing: border-box;
+            background: #ffffff;
+            border: 1px solid rgba(49, 61, 83, 0.16);
+            border-radius: 18px;
+            padding: 18px 22px 20px 22px;
+            box-shadow: 0 8px 28px rgba(15, 23, 42, 0.08);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }}
+        .capacity-map-title {{
+            text-align: center;
+            font-size: 30px;
+            line-height: 1.2;
+            font-weight: 750;
+            color: #17233d;
+            margin: 4px 0 6px 0;
+        }}
+        .map-wrap {{
+            position: relative;
+            width: 100%;
+            aspect-ratio: 1600 / 670;
+            overflow: hidden;
+        }}
+        .map-img {{
+            position: absolute;
+            left: 0;
+            top: -9%;
+            width: 100%;
+            height: auto;
+            opacity: 0.92;
+            pointer-events: none;
+        }}
+        .map-label {{
+            position: absolute;
+            transform: translate(-50%, -50%);
+            min-width: 86px;
+            background: rgba(255, 255, 255, 0.94);
+            border: 1px solid rgba(37, 99, 235, 0.15);
+            border-radius: 12px;
+            padding: 7px 10px;
+            text-align: center;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.10);
+            z-index: 2;
+        }}
+        .island-name {{
+            font-size: 14px;
+            font-weight: 650;
+            color: #1f2937;
+            white-space: nowrap;
+        }}
+        .island-value {{
+            font-size: 24px;
+            line-height: 1.05;
+            font-weight: 800;
+            color: #2563eb;
+            margin-top: 3px;
+        }}
+        .map-dot {{
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #2563eb;
+            box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+            z-index: 3;
+        }}
+        .legend-wrap {{
+            display: grid;
+            grid-template-columns: repeat(7, minmax(0, 1fr));
+            gap: 8px;
+            margin-top: 6px;
+            padding: 12px 10px;
+            border: 1px solid rgba(49, 61, 83, 0.12);
+            border-radius: 14px;
+            background: #fbfdff;
+        }}
+        .legend-item {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            border-right: 1px solid rgba(49, 61, 83, 0.10);
+        }}
+        .legend-item:last-child {{ border-right: none; }}
+        .legend-dot {{
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #2563eb;
+            margin-bottom: 2px;
+        }}
+        .legend-name {{
+            font-size: 13px;
+            font-weight: 600;
+            color: #1f2937;
+            text-align: center;
+        }}
+        .legend-value {{
+            font-size: 20px;
+            font-weight: 800;
+            color: #2563eb;
+        }}
+        @media (max-width: 900px) {{
+            .capacity-map-title {{ font-size: 24px; }}
+            .map-label {{ min-width: 72px; padding: 5px 7px; }}
+            .island-name {{ font-size: 11px; }}
+            .island-value {{ font-size: 18px; }}
+            .legend-wrap {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+            .legend-item {{ border-right: none; }}
+        }}
+    </style>
+    """
+    components.html(html, height=640, scrolling=False)
+
 def render_streamlit_dashboard(analytics: dict[str, pd.DataFrame]) -> None:
     global_df = analytics.get("Resumen_Global", pd.DataFrame())
     values = dict(zip(global_df.get("Indicador", []), global_df.get("Valor", []))) if not global_df.empty else {}
@@ -1566,6 +1756,11 @@ def render_streamlit_dashboard(analytics: dict[str, pd.DataFrame]) -> None:
     c2.metric("Las Palmas", values.get("Total provincia Las Palmas", 0))
     c3.metric("S/C Tenerife", values.get("Total provincia S/C Tenerife", 0))
     c4.metric("Centros pendientes", values.get("Centros pendientes/sin finalizar", 0))
+
+    if is_consulta_user():
+        st.markdown("### Visualización territorial")
+        render_canarias_capacity_map(analytics)
+        st.markdown("")
 
     col_a, col_b = st.columns(2)
     with col_a:
@@ -3830,6 +4025,8 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.3", "Cierre documental y formalización de autoría: cabecera de código, README, CHANGELOG, AUTHORSHIP y huella SHA256 del paquete."),
         ("DCD 1.1.3.1", "Corrección GAP TF: centro docente único para Atención Primaria de Tenerife."),
         ("DCD 1.1.3.2", "Corrección rol consulta: preparación de Excel limitado sin error NameError."),
+        ("DCD 1.1.3.3", "Ajustes finales de visualización: mensaje de correo y ocultación de filas con total 0 en dashboard/PDF."),
+        ("DCD 1.1.3.4", "Mapa visual de capacidad docente por isla en el dashboard del rol consulta."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
