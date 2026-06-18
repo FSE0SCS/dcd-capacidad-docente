@@ -1588,7 +1588,7 @@ def render_canarias_capacity_map(analytics: dict[str, pd.DataFrame]) -> None:
         valores[isla] = valor
 
     # Coordenadas en porcentaje sobre la imagen base mapa_canarias.png (1600 x 912).
-    # DCD 1.1.3.8: microajuste final de tarjetas del mapa tras validación visual.
+    # DCD 1.1.3.9: microajuste final adicional del recuadro de Fuerteventura.
     # Solo se modifican posiciones visuales del dashboard de consulta; no afecta a datos ni cálculos.
     puntos = [
         {"isla": "La Palma", "x": 12.0, "y": 32.0, "dot_x": 12.9, "dot_y": 45.0},
@@ -1596,7 +1596,7 @@ def render_canarias_capacity_map(analytics: dict[str, pd.DataFrame]) -> None:
         {"isla": "La Gomera", "x": 21.8, "y": 57.5, "dot_x": 24.0, "dot_y": 68.2},
         {"isla": "El Hierro", "x": 9.0, "y": 72.0, "dot_x": 9.5, "dot_y": 82.0},
         {"isla": "Gran Canaria", "x": 55.0, "y": 61.5, "dot_x": 55.0, "dot_y": 71.5},
-        {"isla": "Fuerteventura", "x": 76.6, "y": 49.8, "dot_x": 83.2, "dot_y": 54.8},
+        {"isla": "Fuerteventura", "x": 75.6, "y": 49.8, "dot_x": 83.2, "dot_y": 54.8},
         {"isla": "Lanzarote", "x": 91.0, "y": 18.5, "dot_x": 92.3, "dot_y": 30.5},
     ]
 
@@ -4112,6 +4112,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.3.6", "Ajuste fino de los puntos azules del mapa de Canarias en el dashboard de consulta."),
         ("DCD 1.1.3.7", "Ajuste fino final de puntos y tarjetas del mapa de Canarias tras pilotaje."),
         ("DCD 1.1.3.8", "Microajuste final de tarjetas del mapa de Canarias (La Gomera, Tenerife y Fuerteventura)."),
+        ("DCD 1.1.3.9", "Microajuste final adicional del recuadro de Fuerteventura en el mapa de Canarias."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
