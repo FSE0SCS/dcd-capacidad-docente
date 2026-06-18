@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.1.3.5
+# Versión: DCD 1.1.3.6
 # Año: 2026
 #
 # Nota de autoría:
@@ -53,7 +53,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.3.5"
+APP_VERSION = "DCD 1.1.3.6"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -1588,15 +1588,16 @@ def render_canarias_capacity_map(analytics: dict[str, pd.DataFrame]) -> None:
         valores[isla] = valor
 
     # Coordenadas en porcentaje sobre la imagen base mapa_canarias.png (1600 x 912).
-    # Ajustadas sobre la imagen completa, sin recorte, para que etiqueta y punto queden alineados.
+    # DCD 1.1.3.6: ajuste fino de los puntos azules sobre cada isla tras validación visual.
+    # Solo se modifican posiciones visuales del dashboard de consulta; no afecta a datos ni cálculos.
     puntos = [
-        {"isla": "La Palma", "x": 12.0, "y": 32.0, "dot_x": 12.2, "dot_y": 43.5},
-        {"isla": "Tenerife", "x": 38.0, "y": 40.0, "dot_x": 39.0, "dot_y": 54.5},
-        {"isla": "La Gomera", "x": 24.0, "y": 47.0, "dot_x": 24.8, "dot_y": 57.0},
+        {"isla": "La Palma", "x": 12.0, "y": 32.0, "dot_x": 12.9, "dot_y": 45.0},
+        {"isla": "Tenerife", "x": 38.0, "y": 40.0, "dot_x": 41.5, "dot_y": 55.0},
+        {"isla": "La Gomera", "x": 24.0, "y": 47.0, "dot_x": 24.0, "dot_y": 65.5},
         {"isla": "El Hierro", "x": 9.0, "y": 72.0, "dot_x": 9.5, "dot_y": 82.0},
         {"isla": "Gran Canaria", "x": 55.0, "y": 61.5, "dot_x": 55.0, "dot_y": 71.5},
-        {"isla": "Fuerteventura", "x": 80.0, "y": 38.0, "dot_x": 80.2, "dot_y": 51.0},
-        {"isla": "Lanzarote", "x": 91.0, "y": 18.5, "dot_x": 91.2, "dot_y": 27.0},
+        {"isla": "Fuerteventura", "x": 80.0, "y": 38.0, "dot_x": 82.2, "dot_y": 54.8},
+        {"isla": "Lanzarote", "x": 91.0, "y": 18.5, "dot_x": 92.3, "dot_y": 30.5},
     ]
 
     try:
@@ -4108,6 +4109,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.3.3", "Ajustes finales de visualización: mensaje de correo y ocultación de filas con total 0 en dashboard/PDF."),
         ("DCD 1.1.3.4", "Mapa visual de capacidad docente por isla en el dashboard del rol consulta."),
         ("DCD 1.1.3.5", "Corrección PDF de consulta: sin calidad interna, sin filas total 0 y ajuste de coordenadas del mapa."),
+        ("DCD 1.1.3.6", "Ajuste fino de los puntos azules del mapa de Canarias en el dashboard de consulta."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
