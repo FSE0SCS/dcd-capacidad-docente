@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.0 beta 1
+# Versión: DCD 1.2.0 beta 2
 # Año: 2026
 #
 # Nota de autoría:
@@ -35,13 +35,14 @@ except Exception:
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A3, landscape
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 except Exception:
     colors = None
     landscape = None
     A3 = None
     getSampleStyleSheet = None
+    ParagraphStyle = None
     SimpleDocTemplate = None
     Table = None
     TableStyle = None
@@ -53,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.0 beta 1"
+APP_VERSION = "DCD 1.2.0 beta 2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -301,6 +302,7 @@ def init_session_state() -> None:
         "permitir_editar_finalizado": False,
         "observaciones": "",
         "last_message": "",
+        "editing_registro_key": "",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -323,6 +325,37 @@ def reset_selectores_estudio() -> None:
     st.session_state.deslizante_jueves = ""
     st.session_state.deslizante_viernes = ""
     st.session_state.observaciones_titulacion = ""
+
+
+def cargar_registro_en_formulario(item: dict) -> None:
+    """Carga un registro ya introducido en el formulario del Paso 4 para poder editarlo."""
+    st.session_state.editing_registro_key = registro_key(
+        item.get("Nivel Estudio I", ""),
+        item.get("Nivel Estudio II", ""),
+        item.get("Rama", ""),
+        item.get("Titulación", ""),
+    )
+    st.session_state.sel_nivel_i = item.get("Nivel Estudio I", "")
+    st.session_state.sel_nivel_ii = item.get("Nivel Estudio II", "")
+    st.session_state.sel_rama = item.get("Rama", "")
+    st.session_state.sel_titulacion = item.get("Titulación", "")
+    st.session_state.numero_alumnos = safe_int(item.get("Nº alumnos", 0))
+    st.session_state.alumnos_manana = safe_int(item.get("Alumnos mañana", 0))
+    st.session_state.alumnos_tarde = safe_int(item.get("Alumnos tarde", 0))
+    st.session_state.alumnos_rotatorio = safe_int(item.get("Alumnos rotatorio", 0))
+    st.session_state.alumnos_deslizante = safe_int(item.get("Alumnos deslizante", 0))
+    st.session_state.deslizante_lunes = str(item.get("Deslizante lunes", "") or "")
+    st.session_state.deslizante_martes = str(item.get("Deslizante martes", "") or "")
+    st.session_state.deslizante_miercoles = str(item.get("Deslizante miércoles", "") or "")
+    st.session_state.deslizante_jueves = str(item.get("Deslizante jueves", "") or "")
+    st.session_state.deslizante_viernes = str(item.get("Deslizante viernes", "") or "")
+    st.session_state.observaciones_titulacion = str(item.get(OBS_TITULACION_DISPLAY, "") or "")
+
+
+def cancelar_edicion_registro() -> None:
+    """Sale del modo edición de registro del Paso 4 y limpia el formulario."""
+    st.session_state.editing_registro_key = ""
+    reset_selectores_estudio()
 
 
 def normalizar_area(area: str) -> str:
@@ -438,13 +471,17 @@ def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Construye hojas/tablas de turnos y observaciones para Excel/PDF de consulta."""
     base_cols = ["Código borrador", "Fecha guardado", "Área", "Centro docente", "Columna Excel", *KEY_COLUMNS, "Nº alumnos"]
     detalle_cols = base_cols + TURNOS_ALUMNOS_DISPLAY + DESLIZANTE_DISPLAY + [OBS_TITULACION_DISPLAY]
+    detalle_pdf_cols = ["Centro docente", "Nivel I", "Nivel II", "Rama", "Titulación", "Nº", "Mañana", "Tarde", "Rot.", "Desl.", "Patrón deslizante"]
+    obs_pdf_cols = ["Centro docente", "Nivel I", "Nivel II", "Rama", "Titulación", "Nº", "Observaciones"]
     if registros_df is None or registros_df.empty:
         return {
             "Turnos_Detalle": pd.DataFrame(columns=detalle_cols),
+            "Turnos_Detalle_PDF": pd.DataFrame(columns=detalle_pdf_cols),
             "Turnos_Resumen": pd.DataFrame(columns=["Turno", "Total alumnos"]),
             "Turnos_Resumen_Centro": pd.DataFrame(columns=["Centro docente", "Alumnos mañana", "Alumnos tarde", "Alumnos rotatorio", "Alumnos deslizante", "Total turnos"]),
             "Turnos_Resumen_Isla": pd.DataFrame(columns=["Isla", "Alumnos mañana", "Alumnos tarde", "Alumnos rotatorio", "Alumnos deslizante", "Total turnos"]),
             "Observaciones_Titulacion": pd.DataFrame(columns=base_cols + [OBS_TITULACION_DISPLAY]),
+            "Observaciones_Titulacion_PDF": pd.DataFrame(columns=obs_pdf_cols),
         }
 
     df = registros_df.copy()
@@ -487,12 +524,44 @@ def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
             resumen_isla = resumen_isla[resumen_isla["Total turnos"] > 0].sort_values("Total turnos", ascending=False).reset_index(drop=True)
 
     obs = df[df[OBS_TITULACION_DISPLAY].astype(str).str.strip() != ""][base_cols + [OBS_TITULACION_DISPLAY]].copy()
+
+    detalle_pdf = detalle.copy()
+    if not detalle_pdf.empty:
+        def _patron_deslizante(row) -> str:
+            valores = [str(row.get(col, "") or "").strip() for col in DESLIZANTE_DISPLAY]
+            if not any(valores):
+                return ""
+            dias = ["L", "M", "X", "J", "V"]
+            return " / ".join(f"{dia}:{valor}" for dia, valor in zip(dias, valores) if valor)
+
+        detalle_pdf["Patrón deslizante"] = detalle_pdf.apply(_patron_deslizante, axis=1)
+        detalle_pdf = detalle_pdf[["Centro docente", "Nivel Estudio I", "Nivel Estudio II", "Rama", "Titulación", "Nº alumnos", *TURNOS_ALUMNOS_DISPLAY, "Patrón deslizante"]].copy()
+        detalle_pdf = detalle_pdf.rename(columns={
+            "Nivel Estudio I": "Nivel I",
+            "Nivel Estudio II": "Nivel II",
+            "Nº alumnos": "Nº",
+            "Alumnos rotatorio": "Rot.",
+            "Alumnos deslizante": "Desl.",
+        })
+
+    obs_pdf = obs.copy()
+    if not obs_pdf.empty:
+        obs_pdf = obs_pdf[["Centro docente", "Nivel Estudio I", "Nivel Estudio II", "Rama", "Titulación", "Nº alumnos", OBS_TITULACION_DISPLAY]].copy()
+        obs_pdf = obs_pdf.rename(columns={
+            "Nivel Estudio I": "Nivel I",
+            "Nivel Estudio II": "Nivel II",
+            "Nº alumnos": "Nº",
+            OBS_TITULACION_DISPLAY: "Observaciones",
+        })
+
     return {
         "Turnos_Detalle": detalle,
+        "Turnos_Detalle_PDF": detalle_pdf.reset_index(drop=True),
         "Turnos_Resumen": resumen_turnos,
         "Turnos_Resumen_Centro": resumen_centro,
         "Turnos_Resumen_Isla": resumen_isla,
         "Observaciones_Titulacion": obs.reset_index(drop=True),
+        "Observaciones_Titulacion_PDF": obs_pdf.reset_index(drop=True),
     }
 
 
@@ -1996,6 +2065,56 @@ def add_pdf_table(story: list, title: str, df: pd.DataFrame, styles, max_rows: i
     story.append(table)
     story.append(Spacer(1, 8))
 
+
+
+def add_pdf_table_wrapped(story: list, title: str, df: pd.DataFrame, styles, max_rows: int = 20, col_widths: list[float] | None = None, font_size: float = 6.0) -> None:
+    """Añade una tabla PDF con ajuste automático de texto, pensada para observaciones y detalle de turnos."""
+    if df is None or df.empty:
+        return
+    show = df.head(max_rows).copy().fillna("")
+    if show.empty:
+        return
+    story.append(Paragraph(title, styles["Heading2"]))
+
+    if ParagraphStyle is None:
+        data = [list(show.columns)] + show.astype(str).values.tolist()
+    else:
+        header_style = ParagraphStyle(
+            f"Header_{title}",
+            parent=styles["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=6.2,
+            leading=7.2,
+            textColor=colors.white,
+        )
+        cell_style = ParagraphStyle(
+            f"Cell_{title}",
+            parent=styles["BodyText"],
+            fontName="Helvetica",
+            fontSize=font_size,
+            leading=font_size + 1.2,
+        )
+        data = [[Paragraph(str(col), header_style) for col in show.columns]]
+        for _, row in show.iterrows():
+            data.append([Paragraph(str(row.get(col, "")), cell_style) for col in show.columns])
+
+    table = Table(data, colWidths=col_widths, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E78")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 6.2),
+        ("FONTSIZE", (0, 1), (-1, -1), font_size),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    story.append(table)
+    story.append(Spacer(1, 8))
+
 def draw_pdf_footer(canvas, doc):
     """Cabecera y pie de página común en los informes PDF publicados."""
     canvas.saveState()
@@ -2070,8 +2189,24 @@ def generate_matriz_pdf(
             add_pdf_table(story, "Resumen global por turnos", analytics.get("Turnos_Resumen", pd.DataFrame()), styles, max_rows=10)
             add_pdf_table(story, "Resumen de turnos por isla", analytics.get("Turnos_Resumen_Isla", pd.DataFrame()), styles, max_rows=10)
             add_pdf_table(story, "Resumen de turnos por centro docente", analytics.get("Turnos_Resumen_Centro", pd.DataFrame()), styles, max_rows=20)
-            add_pdf_table(story, "Observaciones por titulación", analytics.get("Observaciones_Titulacion", pd.DataFrame()), styles, max_rows=30)
-            add_pdf_table(story, "Detalle de turnos por titulación", analytics.get("Turnos_Detalle", pd.DataFrame()), styles, max_rows=30)
+            add_pdf_table_wrapped(
+                story,
+                "Observaciones por titulación",
+                analytics.get("Observaciones_Titulacion_PDF", pd.DataFrame()),
+                styles,
+                max_rows=30,
+                col_widths=[145, 58, 58, 70, 205, 30, 500],
+                font_size=5.8,
+            )
+            add_pdf_table_wrapped(
+                story,
+                "Detalle de turnos por titulación",
+                analytics.get("Turnos_Detalle_PDF", pd.DataFrame()),
+                styles,
+                max_rows=30,
+                col_widths=[145, 54, 54, 65, 195, 28, 42, 42, 42, 42, 250],
+                font_size=5.6,
+            )
         if include_quality and "Calidad_Resumen" in analytics:
             story.append(Spacer(1, 8))
             story.append(Paragraph("Validaciones de calidad de datos", styles["Heading1"]))
@@ -2746,7 +2881,9 @@ def build_consulta_pdf_from_publication(pub: dict) -> tuple[bool, bytes | None, 
             "Turnos_Resumen_Centro",
             "Turnos_Resumen_Isla",
             "Turnos_Detalle",
+            "Turnos_Detalle_PDF",
             "Observaciones_Titulacion",
+            "Observaciones_Titulacion_PDF",
         ]:
             if sheet in xls.sheet_names:
                 df_sheet = pd.read_excel(xls, sheet_name=sheet)
@@ -2958,7 +3095,9 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
                 "Turnos_Resumen_Centro": turnos_tables["Turnos_Resumen_Centro"],
                 "Turnos_Resumen_Isla": turnos_tables["Turnos_Resumen_Isla"],
                 "Turnos_Detalle": turnos_tables["Turnos_Detalle"],
+                "Turnos_Detalle_PDF": turnos_tables.get("Turnos_Detalle_PDF", pd.DataFrame()),
                 "Observaciones_Titulacion": turnos_tables["Observaciones_Titulacion"],
+                "Observaciones_Titulacion_PDF": turnos_tables.get("Observaciones_Titulacion_PDF", pd.DataFrame()),
                 "Calidad_Resumen": quality_tables["Calidad_Resumen"],
                 "Calidad_Pendientes": quality_tables["Calidad_Pendientes"],
                 "Calidad_Duplicados": quality_tables["Calidad_Duplicados"],
@@ -3373,7 +3512,10 @@ def page_entrada_datos() -> None:
 
     edicion_bloqueada = expediente_finalizado and not st.session_state.get("permitir_editar_finalizado", False)
 
+    editing_mode = bool(st.session_state.get("editing_registro_key"))
     st.markdown("### Añadir o actualizar titulación")
+    if editing_mode:
+        st.info("Está editando un registro ya introducido. Modifique los datos necesarios y pulse **Actualizar registro**.")
 
     nivel_i_options = sorted_unique(catalogo["Nivel Estudio I"])
     st.selectbox(
@@ -3483,9 +3625,10 @@ def page_entrada_datos() -> None:
         help="Campo específico por titulación/especialidad. Se mostrará en Excel y PDF de consulta.",
     )
 
-    col_add, col_clear = st.columns(2)
+    col_add, col_clear, col_cancel = st.columns(3)
     with col_add:
-        if st.button("Añadir / actualizar registro", disabled=edicion_bloqueada):
+        boton_registro = "Actualizar registro" if editing_mode else "Añadir registro"
+        if st.button(boton_registro, disabled=edicion_bloqueada):
             if not all([
                 st.session_state.sel_nivel_i,
                 st.session_state.sel_nivel_ii,
@@ -3510,6 +3653,9 @@ def page_entrada_datos() -> None:
                     st.session_state.sel_rama,
                     st.session_state.sel_titulacion,
                 )
+                original_key = st.session_state.get("editing_registro_key", "")
+                if editing_mode and original_key and original_key != key:
+                    st.session_state.registros.pop(original_key, None)
                 st.session_state.registros[key] = {
                     "Nivel Estudio I": st.session_state.sel_nivel_i,
                     "Nivel Estudio II": st.session_state.sel_nivel_ii,
@@ -3528,10 +3674,18 @@ def page_entrada_datos() -> None:
                     OBS_TITULACION_DISPLAY: st.session_state.get("observaciones_titulacion", ""),
                 }
                 audit_event("registro_actualizado", f"{st.session_state.sel_titulacion} | {int(st.session_state.numero_alumnos)} alumnos | turnos {suma_turnos_form}")
-                st.success("Registro añadido/actualizado correctamente.")
+                if editing_mode:
+                    st.session_state.editing_registro_key = ""
+                    st.success("Registro actualizado correctamente.")
+                else:
+                    st.success("Registro añadido correctamente.")
     with col_clear:
         if st.button("Limpiar selectores", disabled=edicion_bloqueada):
-            reset_selectores_estudio()
+            cancelar_edicion_registro()
+            st.rerun()
+    with col_cancel:
+        if st.button("Cancelar edición", disabled=edicion_bloqueada or not editing_mode):
+            cancelar_edicion_registro()
             st.rerun()
 
     st.markdown("---")
@@ -3545,18 +3699,32 @@ def page_entrada_datos() -> None:
             f"{i + 1}. {r['Nivel Estudio II']} | {r['Rama']} | {r['Titulación']} | {r['Nº alumnos']} alumnos"
             for i, r in enumerate(registros)
         ]
-        delete_label = st.selectbox("Seleccionar registro para eliminar", options=[""] + registro_labels, disabled=edicion_bloqueada)
-        if st.button("Eliminar registro seleccionado", disabled=edicion_bloqueada):
-            if delete_label:
-                idx = int(delete_label.split(".", 1)[0]) - 1
-                item = registros[idx]
-                key = registro_key(item["Nivel Estudio I"], item["Nivel Estudio II"], item["Rama"], item["Titulación"])
-                st.session_state.registros.pop(key, None)
-                audit_event("registro_eliminado", item.get("Titulación", ""))
-                st.success("Registro eliminado.")
-                st.rerun()
-            else:
-                st.warning("Debe seleccionar un registro.")
+        action_label = st.selectbox("Seleccionar registro para editar o eliminar", options=[""] + registro_labels, disabled=edicion_bloqueada)
+        col_edit_reg, col_delete_reg = st.columns(2)
+        with col_edit_reg:
+            if st.button("Editar registro seleccionado", disabled=edicion_bloqueada):
+                if action_label:
+                    idx = int(action_label.split(".", 1)[0]) - 1
+                    item = registros[idx]
+                    cargar_registro_en_formulario(item)
+                    audit_event("registro_edicion_iniciada", item.get("Titulación", ""))
+                    st.rerun()
+                else:
+                    st.warning("Debe seleccionar un registro.")
+        with col_delete_reg:
+            if st.button("Eliminar registro seleccionado", disabled=edicion_bloqueada):
+                if action_label:
+                    idx = int(action_label.split(".", 1)[0]) - 1
+                    item = registros[idx]
+                    key = registro_key(item["Nivel Estudio I"], item["Nivel Estudio II"], item["Rama"], item["Titulación"])
+                    st.session_state.registros.pop(key, None)
+                    if st.session_state.get("editing_registro_key") == key:
+                        cancelar_edicion_registro()
+                    audit_event("registro_eliminado", item.get("Titulación", ""))
+                    st.success("Registro eliminado.")
+                    st.rerun()
+                else:
+                    st.warning("Debe seleccionar un registro.")
     else:
         st.info("Todavía no se ha introducido ningún registro.")
 
@@ -4391,6 +4559,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.3.8", "Microajuste final de tarjetas del mapa de Canarias (La Gomera, Tenerife y Fuerteventura)."),
         ("DCD 1.1.3.9", "Microajuste final adicional del recuadro de Fuerteventura en el mapa de Canarias."),
         ("DCD 1.2.0 beta 1", "Nueva fase funcional: captura de turnos y observaciones por titulación, con persistencia y exportación inicial."),
+        ("DCD 1.2.0 beta 2", "Edición de registros del Paso 4 y pulido del PDF de consulta para turnos y observaciones."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
