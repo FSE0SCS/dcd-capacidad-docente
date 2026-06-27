@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.1.3.7
+# Versión: DCD 1.2.0 beta 1
 # Año: 2026
 #
 # Nota de autoría:
@@ -53,7 +53,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.1.3.7"
+APP_VERSION = "DCD 1.2.0 beta 1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -78,6 +78,11 @@ CONSULTA_EXCEL_SHEETS = [
     "Resumen_Centro_Rama",
     "Resumen_Centro_Nivel",
     "Top_Titulaciones",
+    "Turnos_Resumen",
+    "Turnos_Resumen_Centro",
+    "Turnos_Resumen_Isla",
+    "Turnos_Detalle",
+    "Observaciones_Titulacion",
     "Matriz_DCD",
 ]
 
@@ -220,6 +225,40 @@ PROVINCIA_COLUMNAS = {
 
 PUBLICATION_BUCKET = "dcd-publicaciones"
 
+TURNOS_ALUMNOS_DISPLAY = [
+    "Alumnos mañana",
+    "Alumnos tarde",
+    "Alumnos rotatorio",
+    "Alumnos deslizante",
+]
+
+TURNOS_DB_MAP = {
+    "Alumnos mañana": "alumnos_manana",
+    "Alumnos tarde": "alumnos_tarde",
+    "Alumnos rotatorio": "alumnos_rotatorio",
+    "Alumnos deslizante": "alumnos_deslizante",
+}
+
+DESLIZANTE_DISPLAY = [
+    "Deslizante lunes",
+    "Deslizante martes",
+    "Deslizante miércoles",
+    "Deslizante jueves",
+    "Deslizante viernes",
+]
+
+DESLIZANTE_DB_MAP = {
+    "Deslizante lunes": "deslizante_lunes",
+    "Deslizante martes": "deslizante_martes",
+    "Deslizante miércoles": "deslizante_miercoles",
+    "Deslizante jueves": "deslizante_jueves",
+    "Deslizante viernes": "deslizante_viernes",
+}
+
+OBS_TITULACION_DISPLAY = "Observaciones titulación"
+OBS_TITULACION_DB = "observaciones_titulacion"
+TURNO_DIA_OPTIONS = ["", "M", "T", "R"]
+
 
 # =========================================================
 # UTILIDADES DE ESTADO
@@ -245,6 +284,16 @@ def init_session_state() -> None:
         "sel_rama": "",
         "sel_titulacion": "",
         "numero_alumnos": 0,
+        "alumnos_manana": 0,
+        "alumnos_tarde": 0,
+        "alumnos_rotatorio": 0,
+        "alumnos_deslizante": 0,
+        "deslizante_lunes": "",
+        "deslizante_martes": "",
+        "deslizante_miercoles": "",
+        "deslizante_jueves": "",
+        "deslizante_viernes": "",
+        "observaciones_titulacion": "",
         "codigo_borrador": "",
         "codigo_expediente": "",
         "version_num": 0,
@@ -264,6 +313,16 @@ def reset_selectores_estudio() -> None:
     st.session_state.sel_rama = ""
     st.session_state.sel_titulacion = ""
     st.session_state.numero_alumnos = 0
+    st.session_state.alumnos_manana = 0
+    st.session_state.alumnos_tarde = 0
+    st.session_state.alumnos_rotatorio = 0
+    st.session_state.alumnos_deslizante = 0
+    st.session_state.deslizante_lunes = ""
+    st.session_state.deslizante_martes = ""
+    st.session_state.deslizante_miercoles = ""
+    st.session_state.deslizante_jueves = ""
+    st.session_state.deslizante_viernes = ""
+    st.session_state.observaciones_titulacion = ""
 
 
 def normalizar_area(area: str) -> str:
@@ -320,6 +379,121 @@ def expected_centros_docentes() -> list[dict]:
 
 def registro_key(nivel_i: str, nivel_ii: str, rama: str, titulacion: str) -> str:
     return "||".join([nivel_i, nivel_ii, rama, titulacion])
+
+
+def safe_int(value, default: int = 0) -> int:
+    try:
+        if pd.isna(value):
+            return default
+        return int(value or 0)
+    except Exception:
+        return default
+
+
+def suma_turnos_registro(item: dict) -> int:
+    return sum(safe_int(item.get(col, 0)) for col in TURNOS_ALUMNOS_DISPLAY)
+
+
+def registro_deslizante_completo(item: dict) -> bool:
+    if safe_int(item.get("Alumnos deslizante", 0)) <= 0:
+        return True
+    return all(str(item.get(col, "") or "").strip() in {"M", "T", "R"} for col in DESLIZANTE_DISPLAY)
+
+
+def registro_turnos_cuadra(item: dict) -> bool:
+    return safe_int(item.get("Nº alumnos", 0)) == suma_turnos_registro(item)
+
+
+def registro_from_db_row(row: dict) -> dict:
+    """Convierte una fila de dcd_registros al formato interno/visual de la app."""
+    item = {
+        "Nivel Estudio I": row.get("nivel_i", ""),
+        "Nivel Estudio II": row.get("nivel_ii", ""),
+        "Rama": row.get("rama", ""),
+        "Titulación": row.get("titulacion", ""),
+        "Nº alumnos": safe_int(row.get("numero_alumnos", 0)),
+        "Alumnos mañana": safe_int(row.get("alumnos_manana", 0)),
+        "Alumnos tarde": safe_int(row.get("alumnos_tarde", 0)),
+        "Alumnos rotatorio": safe_int(row.get("alumnos_rotatorio", 0)),
+        "Alumnos deslizante": safe_int(row.get("alumnos_deslizante", 0)),
+        "Deslizante lunes": row.get("deslizante_lunes", "") or "",
+        "Deslizante martes": row.get("deslizante_martes", "") or "",
+        "Deslizante miércoles": row.get("deslizante_miercoles", "") or "",
+        "Deslizante jueves": row.get("deslizante_jueves", "") or "",
+        "Deslizante viernes": row.get("deslizante_viernes", "") or "",
+        OBS_TITULACION_DISPLAY: row.get("observaciones_titulacion", "") or "",
+    }
+    return item
+
+
+def registro_to_db_extra_fields(item: dict) -> dict:
+    out = {db_col: safe_int(item.get(display_col, 0)) for display_col, db_col in TURNOS_DB_MAP.items()}
+    for display_col, db_col in DESLIZANTE_DB_MAP.items():
+        out[db_col] = str(item.get(display_col, "") or "").strip()
+    out[OBS_TITULACION_DB] = str(item.get(OBS_TITULACION_DISPLAY, "") or "").strip()
+    return out
+
+
+def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Construye hojas/tablas de turnos y observaciones para Excel/PDF de consulta."""
+    base_cols = ["Código borrador", "Fecha guardado", "Área", "Centro docente", "Columna Excel", *KEY_COLUMNS, "Nº alumnos"]
+    detalle_cols = base_cols + TURNOS_ALUMNOS_DISPLAY + DESLIZANTE_DISPLAY + [OBS_TITULACION_DISPLAY]
+    if registros_df is None or registros_df.empty:
+        return {
+            "Turnos_Detalle": pd.DataFrame(columns=detalle_cols),
+            "Turnos_Resumen": pd.DataFrame(columns=["Turno", "Total alumnos"]),
+            "Turnos_Resumen_Centro": pd.DataFrame(columns=["Centro docente", "Alumnos mañana", "Alumnos tarde", "Alumnos rotatorio", "Alumnos deslizante", "Total turnos"]),
+            "Turnos_Resumen_Isla": pd.DataFrame(columns=["Isla", "Alumnos mañana", "Alumnos tarde", "Alumnos rotatorio", "Alumnos deslizante", "Total turnos"]),
+            "Observaciones_Titulacion": pd.DataFrame(columns=base_cols + [OBS_TITULACION_DISPLAY]),
+        }
+
+    df = registros_df.copy()
+    for col in base_cols + TURNOS_ALUMNOS_DISPLAY + DESLIZANTE_DISPLAY + [OBS_TITULACION_DISPLAY]:
+        if col not in df.columns:
+            df[col] = 0 if col in TURNOS_ALUMNOS_DISPLAY or col == "Nº alumnos" else ""
+    for col in TURNOS_ALUMNOS_DISPLAY + ["Nº alumnos"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    detalle = df[detalle_cols].copy()
+    detalle["Total turnos"] = detalle[TURNOS_ALUMNOS_DISPLAY].sum(axis=1)
+    obs_mask = detalle[OBS_TITULACION_DISPLAY].astype(str).str.strip() != ""
+    detalle = detalle[(detalle["Total turnos"] > 0) | obs_mask].reset_index(drop=True)
+
+    resumen_turnos = pd.DataFrame([
+        {"Turno": "Mañana", "Total alumnos": int(df["Alumnos mañana"].sum())},
+        {"Turno": "Tarde", "Total alumnos": int(df["Alumnos tarde"].sum())},
+        {"Turno": "Rotatorio", "Total alumnos": int(df["Alumnos rotatorio"].sum())},
+        {"Turno": "Deslizante", "Total alumnos": int(df["Alumnos deslizante"].sum())},
+    ])
+    resumen_turnos = resumen_turnos[resumen_turnos["Total alumnos"] > 0].reset_index(drop=True)
+
+    resumen_centro = pd.DataFrame(columns=["Centro docente", *TURNOS_ALUMNOS_DISPLAY, "Total turnos"])
+    if "Centro docente" in df.columns:
+        resumen_centro = df.groupby("Centro docente", dropna=False)[TURNOS_ALUMNOS_DISPLAY].sum().reset_index()
+        resumen_centro["Total turnos"] = resumen_centro[TURNOS_ALUMNOS_DISPLAY].sum(axis=1)
+        resumen_centro = resumen_centro[resumen_centro["Total turnos"] > 0].sort_values("Total turnos", ascending=False).reset_index(drop=True)
+
+    isla_por_columna = {}
+    for isla, columnas in ISLA_COLUMNAS.items():
+        for col in columnas:
+            isla_por_columna[col] = isla
+    df["Isla"] = df.get("Columna Excel", "").map(isla_por_columna).fillna("") if "Columna Excel" in df.columns else ""
+    resumen_isla = pd.DataFrame(columns=["Isla", *TURNOS_ALUMNOS_DISPLAY, "Total turnos"])
+    if "Isla" in df.columns:
+        tmp = df[df["Isla"].astype(str).str.strip() != ""].copy()
+        if not tmp.empty:
+            resumen_isla = tmp.groupby("Isla", dropna=False)[TURNOS_ALUMNOS_DISPLAY].sum().reset_index()
+            resumen_isla["Total turnos"] = resumen_isla[TURNOS_ALUMNOS_DISPLAY].sum(axis=1)
+            resumen_isla = resumen_isla[resumen_isla["Total turnos"] > 0].sort_values("Total turnos", ascending=False).reset_index(drop=True)
+
+    obs = df[df[OBS_TITULACION_DISPLAY].astype(str).str.strip() != ""][base_cols + [OBS_TITULACION_DISPLAY]].copy()
+    return {
+        "Turnos_Detalle": detalle,
+        "Turnos_Resumen": resumen_turnos,
+        "Turnos_Resumen_Centro": resumen_centro,
+        "Turnos_Resumen_Isla": resumen_isla,
+        "Observaciones_Titulacion": obs.reset_index(drop=True),
+    }
 
 
 # =========================================================
@@ -607,6 +781,7 @@ def registros_to_rows(estado: str = "borrador") -> list[dict]:
             "rama": item["Rama"],
             "titulacion": item["Titulación"],
             "numero_alumnos": int(item["Nº alumnos"]),
+            **registro_to_db_extra_fields(item),
         })
     return rows
 
@@ -724,14 +899,9 @@ def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
         st.session_state.registros = {}
 
         for row in rows:
-            key = registro_key(row["nivel_i"], row["nivel_ii"], row["rama"], row["titulacion"])
-            st.session_state.registros[key] = {
-                "Nivel Estudio I": row["nivel_i"],
-                "Nivel Estudio II": row["nivel_ii"],
-                "Rama": row["rama"],
-                "Titulación": row["titulacion"],
-                "Nº alumnos": int(row.get("numero_alumnos") or 0),
-            }
+            item = registro_from_db_row(row)
+            key = registro_key(item["Nivel Estudio I"], item["Nivel Estudio II"], item["Rama"], item["Titulación"])
+            st.session_state.registros[key] = item
 
         audit_event("cargar_borrador", f"Registros cargados: {len(rows)}", codigo_borrador)
         return True, f"Borrador cargado: {codigo_borrador}"
@@ -989,6 +1159,9 @@ def build_output_excel() -> bytes:
             registros_df.insert(3, "Centro docente", unidad)
             registros_df.insert(4, "Usuario", usuario)
         registros_df.to_excel(writer, sheet_name="Registros_DCD", index=False)
+        turnos_tables = build_turnos_tables(registros_df)
+        turnos_tables["Turnos_Detalle"].to_excel(writer, sheet_name="Turnos_Detalle", index=False)
+        turnos_tables["Observaciones_Titulacion"].to_excel(writer, sheet_name="Observaciones_Titulacion", index=False)
         matriz.to_excel(writer, sheet_name="Matriz_DCD", index=False)
 
         workbook = writer.book
@@ -1003,9 +1176,15 @@ def build_output_excel() -> bytes:
         body_format = workbook.add_format({"border": 1, "valign": "top"})
         int_format = workbook.add_format({"border": 1, "num_format": "0", "valign": "top"})
 
-        for sheet_name in ["Resumen", "Registros_DCD", "Matriz_DCD"]:
+        local_sheets = {
+            "Resumen": resumen,
+            "Registros_DCD": registros_df,
+            "Turnos_Detalle": turnos_tables["Turnos_Detalle"],
+            "Observaciones_Titulacion": turnos_tables["Observaciones_Titulacion"],
+            "Matriz_DCD": matriz,
+        }
+        for sheet_name, df_sheet in local_sheets.items():
             ws = writer.sheets[sheet_name]
-            df_sheet = {"Resumen": resumen, "Registros_DCD": registros_df, "Matriz_DCD": matriz}[sheet_name]
             for col_num, value in enumerate(df_sheet.columns.values):
                 ws.write(0, col_num, value, header_format)
                 max_len = max([len(str(value))] + [len(str(v)) for v in df_sheet[value].head(200).fillna("").tolist()])
@@ -1366,13 +1545,7 @@ def build_current_analytics_from_supabase() -> tuple[bool, str, dict[str, pd.Dat
                 continue
             resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo).execute()
             for row in getattr(resp, "data", []) or []:
-                item = {
-                    "Nivel Estudio I": row.get("nivel_i", ""),
-                    "Nivel Estudio II": row.get("nivel_ii", ""),
-                    "Rama": row.get("rama", ""),
-                    "Titulación": row.get("titulacion", ""),
-                    "Nº alumnos": int(row.get("numero_alumnos") or 0),
-                }
+                item = registro_from_db_row(row)
                 volcar_registro_en_matriz(matriz, item, columna_excel)
         return True, "Analítica generada.", build_analytics_tables(matriz, status_df)
     except Exception as exc:
@@ -1406,13 +1579,7 @@ def build_current_dataset_from_supabase() -> tuple[bool, str, pd.DataFrame | Non
             resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo).execute()
             rows = getattr(resp, "data", []) or []
             for row in rows:
-                item = {
-                    "Nivel Estudio I": row.get("nivel_i", ""),
-                    "Nivel Estudio II": row.get("nivel_ii", ""),
-                    "Rama": row.get("rama", ""),
-                    "Titulación": row.get("titulacion", ""),
-                    "Nº alumnos": int(row.get("numero_alumnos") or 0),
-                }
+                item = registro_from_db_row(row)
                 volcar_registro_en_matriz(matriz, item, columna_excel)
                 registros_consolidados.append({
                     "Código borrador": codigo,
@@ -1897,6 +2064,14 @@ def generate_matriz_pdf(
         add_pdf_table(story, "Top centros docentes / columnas", analytics.get("Resumen_Centro", pd.DataFrame()), styles, max_rows=15)
         add_pdf_table(story, "Top ramas", analytics.get("Resumen_Rama", pd.DataFrame()), styles, max_rows=15)
         add_pdf_table(story, "Top titulaciones", analytics.get("Top_Titulaciones", pd.DataFrame()), styles, max_rows=15)
+        if any(key in analytics for key in ["Turnos_Resumen", "Turnos_Resumen_Centro", "Turnos_Resumen_Isla", "Turnos_Detalle", "Observaciones_Titulacion"]):
+            story.append(Spacer(1, 8))
+            story.append(Paragraph("Distribución por turnos y observaciones", styles["Heading1"]))
+            add_pdf_table(story, "Resumen global por turnos", analytics.get("Turnos_Resumen", pd.DataFrame()), styles, max_rows=10)
+            add_pdf_table(story, "Resumen de turnos por isla", analytics.get("Turnos_Resumen_Isla", pd.DataFrame()), styles, max_rows=10)
+            add_pdf_table(story, "Resumen de turnos por centro docente", analytics.get("Turnos_Resumen_Centro", pd.DataFrame()), styles, max_rows=20)
+            add_pdf_table(story, "Observaciones por titulación", analytics.get("Observaciones_Titulacion", pd.DataFrame()), styles, max_rows=30)
+            add_pdf_table(story, "Detalle de turnos por titulación", analytics.get("Turnos_Detalle", pd.DataFrame()), styles, max_rows=30)
         if include_quality and "Calidad_Resumen" in analytics:
             story.append(Spacer(1, 8))
             story.append(Paragraph("Validaciones de calidad de datos", styles["Heading1"]))
@@ -1965,13 +2140,7 @@ def build_publication_package() -> tuple[bool, str, dict | None]:
         resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo).execute()
         rows = getattr(resp, "data", []) or []
         for row in rows:
-            item = {
-                "Nivel Estudio I": row.get("nivel_i", ""),
-                "Nivel Estudio II": row.get("nivel_ii", ""),
-                "Rama": row.get("rama", ""),
-                "Titulación": row.get("titulacion", ""),
-                "Nº alumnos": int(row.get("numero_alumnos") or 0),
-            }
+            item = registro_from_db_row(row)
             volcar_registro_en_matriz(matriz, item, columna_excel)
             registros_consolidados.append({
                 "Código borrador": codigo,
@@ -1984,7 +2153,9 @@ def build_publication_package() -> tuple[bool, str, dict | None]:
 
     analytics = build_analytics_tables(matriz, status_df)
     registros_df = pd.DataFrame(registros_consolidados)
+    turnos_tables = build_turnos_tables(registros_df)
     quality_tables = build_quality_tables(matriz, registros_df, status_df, duplicados)
+    analytics.update(turnos_tables)
     analytics.update(quality_tables)
 
     ok_xlsx, msg_xlsx, excel_bytes, excel_filename = build_consolidated_excel_from_supabase()
@@ -2571,6 +2742,11 @@ def build_consulta_pdf_from_publication(pub: dict) -> tuple[bool, bytes | None, 
             "Resumen_Centro_Rama",
             "Resumen_Centro_Nivel",
             "Top_Titulaciones",
+            "Turnos_Resumen",
+            "Turnos_Resumen_Centro",
+            "Turnos_Resumen_Isla",
+            "Turnos_Detalle",
+            "Observaciones_Titulacion",
         ]:
             if sheet in xls.sheet_names:
                 df_sheet = pd.read_excel(xls, sheet_name=sheet)
@@ -2706,13 +2882,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
             rows = getattr(resp, "data", []) or []
 
             for row in rows:
-                item = {
-                    "Nivel Estudio I": row.get("nivel_i", ""),
-                    "Nivel Estudio II": row.get("nivel_ii", ""),
-                    "Rama": row.get("rama", ""),
-                    "Titulación": row.get("titulacion", ""),
-                    "Nº alumnos": int(row.get("numero_alumnos") or 0),
-                }
+                item = registro_from_db_row(row)
                 volcar_registro_en_matriz(matriz, item, columna_excel)
                 registros_consolidados.append({
                     "Código borrador": codigo,
@@ -2768,6 +2938,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
 
         analytics = build_analytics_tables(matriz, status_df)
         quality_tables = build_quality_tables(matriz, registros_df, status_df, duplicados)
+        turnos_tables = build_turnos_tables(registros_df)
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -2783,6 +2954,11 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
                 "Resumen_Centro_Rama": analytics["Resumen_Centro_Rama"],
                 "Resumen_Centro_Nivel": analytics["Resumen_Centro_Nivel"],
                 "Top_Titulaciones": analytics["Top_Titulaciones"],
+                "Turnos_Resumen": turnos_tables["Turnos_Resumen"],
+                "Turnos_Resumen_Centro": turnos_tables["Turnos_Resumen_Centro"],
+                "Turnos_Resumen_Isla": turnos_tables["Turnos_Resumen_Isla"],
+                "Turnos_Detalle": turnos_tables["Turnos_Detalle"],
+                "Observaciones_Titulacion": turnos_tables["Observaciones_Titulacion"],
                 "Calidad_Resumen": quality_tables["Calidad_Resumen"],
                 "Calidad_Pendientes": quality_tables["Calidad_Pendientes"],
                 "Calidad_Duplicados": quality_tables["Calidad_Duplicados"],
@@ -3254,6 +3430,59 @@ def page_entrada_datos() -> None:
         disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion),
     )
 
+    st.markdown("#### Distribución por turnos")
+    st.caption("Indique cuántos alumnos de esta titulación corresponden a cada turno. La suma debe coincidir con el número total de alumnos.")
+    t1, t2, t3, t4 = st.columns(4)
+    with t1:
+        st.number_input("Mañana", min_value=0, step=1, key="alumnos_manana", disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion))
+    with t2:
+        st.number_input("Tarde", min_value=0, step=1, key="alumnos_tarde", disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion))
+    with t3:
+        st.number_input("Rotatorio", min_value=0, step=1, key="alumnos_rotatorio", disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion))
+    with t4:
+        st.number_input("Deslizante", min_value=0, step=1, key="alumnos_deslizante", disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion))
+
+    suma_turnos_form = (
+        int(st.session_state.get("alumnos_manana", 0) or 0)
+        + int(st.session_state.get("alumnos_tarde", 0) or 0)
+        + int(st.session_state.get("alumnos_rotatorio", 0) or 0)
+        + int(st.session_state.get("alumnos_deslizante", 0) or 0)
+    )
+    total_form = int(st.session_state.get("numero_alumnos", 0) or 0)
+    if bool(st.session_state.sel_titulacion):
+        if suma_turnos_form == total_form:
+            st.success(f"Suma de turnos correcta: {suma_turnos_form} / {total_form}")
+        else:
+            st.warning(f"La suma de turnos ({suma_turnos_form}) debe coincidir con el número total de alumnos ({total_form}).")
+
+    if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0:
+        st.markdown("#### Patrón semanal del turno deslizante")
+        st.caption("Para el turno deslizante, indique el patrón de lunes a viernes: M = mañana, T = tarde, R = rotatorio.")
+        d1, d2, d3, d4, d5 = st.columns(5)
+        with d1:
+            st.selectbox("Lunes", options=TURNO_DIA_OPTIONS, key="deslizante_lunes", disabled=edicion_bloqueada)
+        with d2:
+            st.selectbox("Martes", options=TURNO_DIA_OPTIONS, key="deslizante_martes", disabled=edicion_bloqueada)
+        with d3:
+            st.selectbox("Miércoles", options=TURNO_DIA_OPTIONS, key="deslizante_miercoles", disabled=edicion_bloqueada)
+        with d4:
+            st.selectbox("Jueves", options=TURNO_DIA_OPTIONS, key="deslizante_jueves", disabled=edicion_bloqueada)
+        with d5:
+            st.selectbox("Viernes", options=TURNO_DIA_OPTIONS, key="deslizante_viernes", disabled=edicion_bloqueada)
+    else:
+        st.session_state.deslizante_lunes = ""
+        st.session_state.deslizante_martes = ""
+        st.session_state.deslizante_miercoles = ""
+        st.session_state.deslizante_jueves = ""
+        st.session_state.deslizante_viernes = ""
+
+    st.text_area(
+        "Observaciones de esta titulación",
+        key="observaciones_titulacion",
+        disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion),
+        help="Campo específico por titulación/especialidad. Se mostrará en Excel y PDF de consulta.",
+    )
+
     col_add, col_clear = st.columns(2)
     with col_add:
         if st.button("Añadir / actualizar registro", disabled=edicion_bloqueada):
@@ -3264,6 +3493,16 @@ def page_entrada_datos() -> None:
                 st.session_state.sel_titulacion,
             ]):
                 st.warning("Debe completar Nivel I, Nivel II, Rama y Titulación.")
+            elif suma_turnos_form != total_form:
+                st.error("No se puede añadir el registro: la suma de alumnos por turnos debe coincidir con el número total de alumnos.")
+            elif int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 and not all([
+                st.session_state.get("deslizante_lunes"),
+                st.session_state.get("deslizante_martes"),
+                st.session_state.get("deslizante_miercoles"),
+                st.session_state.get("deslizante_jueves"),
+                st.session_state.get("deslizante_viernes"),
+            ]):
+                st.error("Si hay alumnos en turno deslizante, debe indicar el patrón de lunes a viernes.")
             else:
                 key = registro_key(
                     st.session_state.sel_nivel_i,
@@ -3277,8 +3516,18 @@ def page_entrada_datos() -> None:
                     "Rama": st.session_state.sel_rama,
                     "Titulación": st.session_state.sel_titulacion,
                     "Nº alumnos": int(st.session_state.numero_alumnos),
+                    "Alumnos mañana": int(st.session_state.get("alumnos_manana", 0) or 0),
+                    "Alumnos tarde": int(st.session_state.get("alumnos_tarde", 0) or 0),
+                    "Alumnos rotatorio": int(st.session_state.get("alumnos_rotatorio", 0) or 0),
+                    "Alumnos deslizante": int(st.session_state.get("alumnos_deslizante", 0) or 0),
+                    "Deslizante lunes": st.session_state.get("deslizante_lunes", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante martes": st.session_state.get("deslizante_martes", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante miércoles": st.session_state.get("deslizante_miercoles", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante jueves": st.session_state.get("deslizante_jueves", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante viernes": st.session_state.get("deslizante_viernes", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    OBS_TITULACION_DISPLAY: st.session_state.get("observaciones_titulacion", ""),
                 }
-                audit_event("registro_actualizado", f"{st.session_state.sel_titulacion} | {int(st.session_state.numero_alumnos)} alumnos")
+                audit_event("registro_actualizado", f"{st.session_state.sel_titulacion} | {int(st.session_state.numero_alumnos)} alumnos | turnos {suma_turnos_form}")
                 st.success("Registro añadido/actualizado correctamente.")
     with col_clear:
         if st.button("Limpiar selectores", disabled=edicion_bloqueada):
@@ -3359,6 +3608,16 @@ def page_resumen_descarga() -> None:
 
     df = pd.DataFrame(registros)
     total_alumnos = int(df["Nº alumnos"].sum())
+    total_turnos = sum(suma_turnos_registro(item) for item in registros)
+    turnos_errors = []
+    deslizante_errors = []
+    for item in registros:
+        if not registro_turnos_cuadra(item):
+            turnos_errors.append(
+                f"{item.get('Titulación', '')}: total {safe_int(item.get('Nº alumnos', 0))}, turnos {suma_turnos_registro(item)}"
+            )
+        if not registro_deslizante_completo(item):
+            deslizante_errors.append(str(item.get("Titulación", "")))
     codigo = st.session_state.codigo_borrador or build_codigo_borrador(st.session_state.direccion_selected)
     filename = f"{codigo}.xlsx"
     excel_bytes = build_output_excel()
@@ -3370,6 +3629,18 @@ def page_resumen_descarga() -> None:
         st.metric("Estado actual", st.session_state.get("draft_estado", "borrador").upper())
     with col_total:
         st.metric("Total alumnos introducidos", total_alumnos)
+    st.metric("Total alumnos distribuidos por turnos", total_turnos)
+    if not turnos_errors and not deslizante_errors:
+        st.success("La distribución por turnos cuadra con el total de alumnos introducido.")
+    else:
+        if turnos_errors:
+            st.error("Hay titulaciones cuya suma de turnos no coincide con el número total de alumnos.")
+            for err in turnos_errors[:20]:
+                st.write(f"- {err}")
+        if deslizante_errors:
+            st.error("Hay titulaciones con turno deslizante sin patrón completo de lunes a viernes.")
+            for err in deslizante_errors[:20]:
+                st.write(f"- {err}")
 
     # Control preventivo de calidad antes de finalizar. No bloquea, pero avisa de situaciones a revisar.
     st.markdown("### Revisión automática de calidad")
@@ -3390,6 +3661,10 @@ def page_resumen_descarga() -> None:
         st.caption("Estos avisos no impiden finalizar, pero ayudan a detectar posibles errores antes del cierre.")
     else:
         st.success("No se han detectado avisos básicos de calidad en este expediente.")
+
+    bloqueos_turnos = bool(turnos_errors or deslizante_errors)
+    if bloqueos_turnos:
+        st.error("No se podrá finalizar el expediente hasta corregir la distribución por turnos.")
 
     st.markdown("---")
     st.subheader("Recordatorio antes de finalizar")
@@ -3454,6 +3729,8 @@ def page_resumen_descarga() -> None:
         if st.button("Enviar correo automático"):
             if not all([check1, check2, check3]):
                 st.warning("Debe marcar las tres casillas de revisión antes de enviar el correo.")
+            elif bloqueos_turnos:
+                st.warning("Debe corregir los errores de distribución por turnos antes de enviar el correo.")
             else:
                 ok_save, msg_save = save_draft_to_supabase(estado="finalizado")
                 if ok_save:
@@ -4113,6 +4390,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.3.7", "Ajuste fino final de puntos y tarjetas del mapa de Canarias tras pilotaje."),
         ("DCD 1.1.3.8", "Microajuste final de tarjetas del mapa de Canarias (La Gomera, Tenerife y Fuerteventura)."),
         ("DCD 1.1.3.9", "Microajuste final adicional del recuadro de Fuerteventura en el mapa de Canarias."),
+        ("DCD 1.2.0 beta 1", "Nueva fase funcional: captura de turnos y observaciones por titulación, con persistencia y exportación inicial."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)

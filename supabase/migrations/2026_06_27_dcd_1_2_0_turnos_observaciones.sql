@@ -1,3 +1,4 @@
+-- DCD 1.2.0 - Turnos y observaciones por titulación
 alter table public.dcd_borradores
 add column if not exists alumnos_manana integer default 0,
 add column if not exists alumnos_tarde integer default 0,
