@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.0 beta 2
+# Versión: DCD 1.2.0 beta 3
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.0 beta 2"
+APP_VERSION = "DCD 1.2.0 beta 3"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -303,6 +303,7 @@ def init_session_state() -> None:
         "observaciones": "",
         "last_message": "",
         "editing_registro_key": "",
+        "pending_edit_registro": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -350,6 +351,21 @@ def cargar_registro_en_formulario(item: dict) -> None:
     st.session_state.deslizante_jueves = str(item.get("Deslizante jueves", "") or "")
     st.session_state.deslizante_viernes = str(item.get("Deslizante viernes", "") or "")
     st.session_state.observaciones_titulacion = str(item.get(OBS_TITULACION_DISPLAY, "") or "")
+
+
+def aplicar_edicion_pendiente_en_formulario() -> None:
+    """Aplica, antes de renderizar widgets, el registro seleccionado para edición.
+
+    Streamlit no permite modificar st.session_state de una key asociada a un widget
+    después de que ese widget se haya instanciado en la misma ejecución. Por eso el
+    botón de edición deja el registro en pending_edit_registro, hace rerun, y aquí
+    se cargan los valores antes de pintar selectbox/number_input/text_area.
+    """
+    item = st.session_state.get("pending_edit_registro")
+    if not item:
+        return
+    st.session_state.pending_edit_registro = None
+    cargar_registro_en_formulario(item)
 
 
 def cancelar_edicion_registro() -> None:
@@ -3512,6 +3528,10 @@ def page_entrada_datos() -> None:
 
     edicion_bloqueada = expediente_finalizado and not st.session_state.get("permitir_editar_finalizado", False)
 
+    # Si se pulsó "Editar registro seleccionado" en la ejecución anterior,
+    # cargar ahora los valores en session_state antes de crear los widgets.
+    aplicar_edicion_pendiente_en_formulario()
+
     editing_mode = bool(st.session_state.get("editing_registro_key"))
     st.markdown("### Añadir o actualizar titulación")
     if editing_mode:
@@ -3706,7 +3726,7 @@ def page_entrada_datos() -> None:
                 if action_label:
                     idx = int(action_label.split(".", 1)[0]) - 1
                     item = registros[idx]
-                    cargar_registro_en_formulario(item)
+                    st.session_state.pending_edit_registro = dict(item)
                     audit_event("registro_edicion_iniciada", item.get("Titulación", ""))
                     st.rerun()
                 else:
@@ -4560,6 +4580,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.1.3.9", "Microajuste final adicional del recuadro de Fuerteventura en el mapa de Canarias."),
         ("DCD 1.2.0 beta 1", "Nueva fase funcional: captura de turnos y observaciones por titulación, con persistencia y exportación inicial."),
         ("DCD 1.2.0 beta 2", "Edición de registros del Paso 4 y pulido del PDF de consulta para turnos y observaciones."),
+        ("DCD 1.2.0 beta 3", "Corrección de carga de registros en modo edición antes del renderizado de widgets Streamlit."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
