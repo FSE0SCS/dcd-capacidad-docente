@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.1.3.4)
+# DATOS CAPACIDAD DOCENTE (DCD 1.2.0 RC1)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 ## Autoría del proyecto
@@ -7,7 +7,7 @@ Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel 
 - **Responsable funcional del proyecto:** Alberto Cabrera
 - **Desarrollado para:** F.S.E. – S.C.S.
 - **Proyecto:** DATOS CAPACIDAD DOCENTE (DCD)
-- **Versión estable:** DCD 1.1.3.4
+- **Versión candidata estable:** DCD 1.2.0 RC1
 - **Año:** 2026
 
 La autoría funcional y de desarrollo queda identificada en `app.py`, `README.md`, `AUTHORSHIP.md`, `CHANGELOG.md` y en la huella SHA256 del paquete de distribución.
@@ -42,6 +42,21 @@ Esta versión parte de la DCD 1.0 y añade:
 - Auditoría ampliada: login correcto/fallido, consultas externas, descargas PDF/Excel y backup admin.
 - Panel administrador `Auditoría/Backup` con filtros y exportación segura de tablas principales.
 - Panel administrador `Calidad de datos` con validaciones, alertas y comparativa entre publicaciones.
+
+
+## DCD 1.2.0 RC1 — Turnos y observaciones por titulación
+
+Esta versión candidata incorpora la nueva fase funcional de turnos y observaciones por titulación:
+
+- Captura de alumnos por turno: Mañana, Tarde, Rotatorio y Deslizante.
+- Patrón semanal para turno deslizante de lunes a viernes con valores M/T/R.
+- Observaciones específicas por titulación/especialidad.
+- Edición de registros ya introducidos en el Paso 4.
+- Validación de que la suma de turnos coincide con el número total de alumnos.
+- Persistencia en borradores y registros de Supabase.
+- Recuperación correcta de borradores con turnos y observaciones.
+- Exportación de turnos y observaciones a Excel admin, Excel consulta y PDF consulta.
+- Dashboard de consulta mantenido sin cambios para preservar la visualización territorial validada.
 
 ## 1. Estructura del proyecto
 

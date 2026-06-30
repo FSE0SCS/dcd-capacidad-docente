@@ -1,5 +1,17 @@
 # CHANGELOG — DATOS CAPACIDAD DOCENTE (DCD)
 
+## DCD 1.2.0 RC1
+
+- Versión candidata estable de la nueva fase funcional de turnos y observaciones por titulación.
+- Captura de distribución de alumnos por Mañana, Tarde, Rotatorio y Deslizante.
+- Captura del patrón semanal del turno deslizante de lunes a viernes con M/T/R.
+- Nuevo campo de Observaciones por titulación/especialidad, visible en Excel y PDF de consulta.
+- Edición de registros ya introducidos en el Paso 4.
+- Validación de coherencia entre número total de alumnos y suma de turnos.
+- Guardado, recuperación de borrador, finalización y envío de correo validados.
+- Excel admin, Excel consulta y PDF consulta validados con turnos y observaciones.
+- Dashboard de consulta se mantiene sin añadir turnos para preservar la visualización territorial validada.
+
 ## DCD 1.1.3.4
 
 - Incorporación de mapa visual de Canarias en el dashboard del rol consulta.

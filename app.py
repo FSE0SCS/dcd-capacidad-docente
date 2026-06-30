@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.0 beta 3
+# Versión: DCD 1.2.0 RC1
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.0 beta 3"
+APP_VERSION = "DCD 1.2.0 RC1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -4581,6 +4581,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.0 beta 1", "Nueva fase funcional: captura de turnos y observaciones por titulación, con persistencia y exportación inicial."),
         ("DCD 1.2.0 beta 2", "Edición de registros del Paso 4 y pulido del PDF de consulta para turnos y observaciones."),
         ("DCD 1.2.0 beta 3", "Corrección de carga de registros en modo edición antes del renderizado de widgets Streamlit."),
+        ("DCD 1.2.0 RC1", "Versión candidata estable: turnos y observaciones validados en rol usuario, admin, consulta, Excel y PDF."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
