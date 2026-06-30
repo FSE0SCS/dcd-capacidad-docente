@@ -1,4 +1,4 @@
-# DATOS CAPACIDAD DOCENTE (DCD 1.2.0 RC1)
+# DATOS CAPACIDAD DOCENTE (DCD 1.2.1 beta 1)
 
 Aplicativo Streamlit para recoger datos de capacidad docente a partir del Excel base `listado_para_capacidad_docente.xlsx`.
 ## Autoría del proyecto
@@ -440,3 +440,8 @@ Esta versión requiere ejecutar el `supabase/schema.sql` actualizado.
 
 ### DCD 1.1.3.5
 Corrección visual y de presentación para rol consulta: PDF de consulta sin calidad interna, sin filas con total 0 y mapa territorial ajustado.
+
+
+### DCD 1.2.1 beta 1
+
+Se inicia la fase multiusuario por centro docente. La primera beta añade una pestaña administrativa para configurar centros multiusuario y asignar usuarios existentes.

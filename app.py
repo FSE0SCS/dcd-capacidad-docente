@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.0 RC1
+# Versión: DCD 1.2.1 beta 1
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.0 RC1"
+APP_VERSION = "DCD 1.2.1 beta 1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -4251,6 +4251,283 @@ def render_admin_cierre() -> None:
     st.caption("La publicación por fecha tope se evalúa al usar la app o al pulsar 'Evaluar ahora cierre automático'. Para automatismo 24/7 sin accesos habría que añadir una tarea programada externa.")
 
 
+
+# =========================================================
+# ADMIN MULTIUSUARIO POR CENTRO
+# =========================================================
+def list_multiusuario_configs() -> list[dict]:
+    client = get_supabase_client()
+    if client is None:
+        return []
+    try:
+        resp = client.table("dcd_centros_multiusuario_config").select("*").order("centro_docente").execute()
+        return getattr(resp, "data", []) or []
+    except Exception as exc:
+        st.session_state["last_multiusuario_error"] = str(exc)
+        return []
+
+
+def get_multiusuario_config(centro_docente: str) -> dict:
+    client = get_supabase_client()
+    if client is None or not centro_docente:
+        return {}
+    try:
+        resp = client.table("dcd_centros_multiusuario_config").select("*").eq("centro_docente", centro_docente).limit(1).execute()
+        rows = getattr(resp, "data", []) or []
+        return rows[0] if rows else {}
+    except Exception as exc:
+        st.session_state["last_multiusuario_error"] = str(exc)
+        return {}
+
+
+def save_multiusuario_config(
+    centro_docente: str,
+    area: str,
+    multiusuario_activo: bool,
+    usuarios_previstos: int,
+    permite_consolidacion_parcial: bool = True,
+    observaciones_config: str = "",
+) -> tuple[bool, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, "La Base de Datos no está configurada."
+    centro_docente = (centro_docente or "").strip()
+    if not centro_docente:
+        return False, "Debe seleccionar un centro docente."
+    usuarios_previstos = max(1, int(usuarios_previstos or 1))
+    try:
+        client.table("dcd_centros_multiusuario_config").upsert({
+            "centro_docente": centro_docente,
+            "area": normalizar_area(area or ""),
+            "multiusuario_activo": bool(multiusuario_activo),
+            "usuarios_previstos": usuarios_previstos,
+            "permite_consolidacion_parcial": bool(permite_consolidacion_parcial),
+            "observaciones_config": observaciones_config or "",
+            "actualizado_por": st.session_state.get("current_user", ""),
+            "updated_at": datetime.now().isoformat(),
+        }, on_conflict="centro_docente").execute()
+        audit_event("guardar_config_multiusuario", f"Centro: {centro_docente} | Activo: {multiusuario_activo} | Usuarios previstos: {usuarios_previstos}")
+        return True, "Configuración multiusuario guardada correctamente."
+    except Exception as exc:
+        return False, f"Error al guardar configuración multiusuario: {exc}"
+
+
+def list_multiusuario_assignments(centro_docente: str) -> list[dict]:
+    client = get_supabase_client()
+    if client is None or not centro_docente:
+        return []
+    try:
+        resp = client.table("dcd_centros_multiusuario_usuarios").select("*").eq("centro_docente", centro_docente).order("orden_participante").execute()
+        return getattr(resp, "data", []) or []
+    except Exception as exc:
+        st.session_state["last_multiusuario_error"] = str(exc)
+        return []
+
+
+def sync_multiusuario_assignments(centro_docente: str, usernames: list[str]) -> tuple[bool, str]:
+    client = get_supabase_client()
+    if client is None:
+        return False, "La Base de Datos no está configurada."
+    centro_docente = (centro_docente or "").strip()
+    usernames = [(u or "").strip().lower() for u in usernames if (u or "").strip()]
+    if not centro_docente:
+        return False, "Debe seleccionar un centro docente."
+    try:
+        existing = list_multiusuario_assignments(centro_docente)
+        existing_by_user = {str(x.get("username", "")).strip().lower(): x for x in existing if x.get("username")}
+
+        # Activar/crear seleccionados.
+        for idx, username in enumerate(usernames, start=1):
+            payload = {
+                "centro_docente": centro_docente,
+                "username": username,
+                "email": username if "@" in username else "",
+                "activo": True,
+                "orden_participante": idx,
+                "updated_at": datetime.now().isoformat(),
+            }
+            client.table("dcd_centros_multiusuario_usuarios").upsert(
+                payload,
+                on_conflict="centro_docente,username"
+            ).execute()
+
+        # Desactivar los que ya no estén seleccionados, manteniendo trazabilidad.
+        for username, row in existing_by_user.items():
+            if username not in usernames:
+                client.table("dcd_centros_multiusuario_usuarios").update({
+                    "activo": False,
+                    "updated_at": datetime.now().isoformat(),
+                }).eq("id", row.get("id")).execute()
+
+        audit_event("sincronizar_usuarios_multiusuario", f"Centro: {centro_docente} | Usuarios activos: {', '.join(usernames)}")
+        return True, "Usuarios asignados al centro sincronizados correctamente."
+    except Exception as exc:
+        return False, f"Error al sincronizar usuarios del centro: {exc}"
+
+
+def build_multiusuario_estado_df(centro_docente: str, assignments: list[dict]) -> pd.DataFrame:
+    if not assignments:
+        return pd.DataFrame(columns=["Usuario", "Activo", "Orden", "Estado aportación", "Registros finalizados"])
+    client = get_supabase_client()
+    rows = []
+    for a in assignments:
+        username = str(a.get("username", "")).strip().lower()
+        finalizados = 0
+        estado = "Pendiente"
+        if client is not None and username:
+            try:
+                resp = client.table("dcd_registros").select("id").eq("unidad_docente", centro_docente).eq("usuario_propietario", username).eq("estado", "finalizado").execute()
+                data = getattr(resp, "data", []) or []
+                finalizados = len(data)
+                if finalizados > 0:
+                    estado = "Con aportación finalizada"
+            except Exception:
+                pass
+        rows.append({
+            "Usuario": username,
+            "Activo": "Sí" if a.get("activo") else "No",
+            "Orden": a.get("orden_participante", ""),
+            "Estado aportación": estado,
+            "Registros finalizados": finalizados,
+        })
+    return pd.DataFrame(rows)
+
+
+def render_admin_multiusuario_centros() -> None:
+    st.subheader("Multiusuario por centro docente")
+    st.info(
+        "Esta primera beta permite configurar qué centros funcionarán en modo multiusuario y qué usuarios pertenecen a cada centro. "
+        "La consolidación automática del centro se implementará en la siguiente fase, tras validar esta configuración."
+    )
+
+    if not supabase_available():
+        st.warning("La Base de Datos no está configurada. No se puede gestionar multiusuario.")
+        return
+
+    last_error = st.session_state.get("last_multiusuario_error", "")
+    if last_error:
+        st.warning(f"Último aviso multiusuario: {last_error}")
+
+    users = list_users_from_supabase()
+    users_df = pd.DataFrame(users)
+    centros_configs = list_multiusuario_configs()
+
+    if centros_configs:
+        st.markdown("### Centros configurados")
+        df_cfg = pd.DataFrame(centros_configs)
+        cols = [c for c in ["centro_docente", "area", "multiusuario_activo", "usuarios_previstos", "permite_consolidacion_parcial", "actualizado_por", "updated_at"] if c in df_cfg.columns]
+        st.dataframe(df_cfg[cols], use_container_width=True, hide_index=True)
+    else:
+        st.caption("Todavía no hay centros configurados específicamente como multiusuario.")
+
+    st.markdown("---")
+    st.markdown("### Configurar centro")
+
+    area_sel = st.selectbox("Área", options=[""] + AREA_OPTIONS, key="multi_area_sel")
+    centros_area = DIRECCIONES_POR_AREA.get(area_sel, []) if area_sel else []
+    centro_sel = st.selectbox("Centro docente", options=[""] + centros_area, key="multi_centro_sel")
+
+    if not centro_sel:
+        st.info("Seleccione un área y un centro docente para configurar el modo multiusuario.")
+        return
+
+    current_cfg = get_multiusuario_config(centro_sel)
+    current_assignments = list_multiusuario_assignments(centro_sel)
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        multi_activo = st.checkbox(
+            "Centro multiusuario",
+            value=bool(current_cfg.get("multiusuario_activo", False)),
+            help="Si está desactivado, el centro funciona como hasta ahora: un expediente ordinario por centro.",
+            key=f"multi_activo_{safe_code(centro_sel)}",
+        )
+    with col_b:
+        usuarios_previstos = st.number_input(
+            "Nº usuarios previstos",
+            min_value=1,
+            max_value=20,
+            value=int(current_cfg.get("usuarios_previstos") or 1),
+            step=1,
+            key=f"multi_previstos_{safe_code(centro_sel)}",
+        )
+    with col_c:
+        parcial = st.checkbox(
+            "Permitir consolidación parcial por admin",
+            value=bool(current_cfg.get("permite_consolidacion_parcial", True)),
+            key=f"multi_parcial_{safe_code(centro_sel)}",
+        )
+
+    obs_cfg = st.text_area(
+        "Observaciones internas de configuración",
+        value=current_cfg.get("observaciones_config", "") if current_cfg else "",
+        key=f"multi_obs_{safe_code(centro_sel)}",
+    )
+
+    eligible_users = []
+    if not users_df.empty:
+        tmp = users_df.copy()
+        if "role" in tmp.columns:
+            tmp = tmp[tmp["role"].astype(str).str.lower().eq("usuario")]
+        if "unidad_docente" in tmp.columns:
+            tmp = tmp[tmp["unidad_docente"].astype(str).eq(centro_sel)]
+        if "activo" in tmp.columns:
+            tmp = tmp[tmp["activo"].fillna(True).astype(bool)]
+        eligible_users = sorted(tmp["username"].dropna().astype(str).str.lower().unique().tolist()) if "username" in tmp.columns else []
+
+    assigned_active = sorted([str(a.get("username", "")).strip().lower() for a in current_assignments if a.get("activo") and a.get("username")])
+    selected_users = st.multiselect(
+        "Usuarios asignados a este centro",
+        options=eligible_users,
+        default=[u for u in assigned_active if u in eligible_users],
+        help="Solo se muestran usuarios activos de rol usuario asignados previamente a este centro en Usuarios y permisos.",
+        key=f"multi_users_{safe_code(centro_sel)}",
+    )
+
+    if multi_activo and len(selected_users) != int(usuarios_previstos):
+        st.warning(
+            f"El centro está marcado como multiusuario con {int(usuarios_previstos)} usuarios previstos, "
+            f"pero actualmente hay {len(selected_users)} usuarios seleccionados."
+        )
+
+    col_save1, col_save2 = st.columns(2)
+    with col_save1:
+        if st.button("Guardar configuración multiusuario", key=f"btn_save_multi_{safe_code(centro_sel)}"):
+            ok, msg = save_multiusuario_config(
+                centro_docente=centro_sel,
+                area=area_sel,
+                multiusuario_activo=multi_activo,
+                usuarios_previstos=int(usuarios_previstos),
+                permite_consolidacion_parcial=parcial,
+                observaciones_config=obs_cfg,
+            )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+    with col_save2:
+        if st.button("Guardar usuarios asignados", key=f"btn_save_multi_users_{safe_code(centro_sel)}"):
+            ok, msg = sync_multiusuario_assignments(centro_sel, selected_users)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+    st.markdown("### Estado de usuarios asignados")
+    assignments_after = list_multiusuario_assignments(centro_sel)
+    if assignments_after:
+        estado_df = build_multiusuario_estado_df(centro_sel, assignments_after)
+        st.dataframe(estado_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay usuarios asignados a este centro todavía.")
+
+    st.caption(
+        "Nota: en esta beta se valida la configuración multiusuario. "
+        "La consolidación operativa del centro y su incorporación al consolidado general se añadirá en la siguiente iteración."
+    )
+
+
 def render_admin_usuarios() -> None:
     st.subheader("Usuarios y permisos")
     st.info("Las contraseñas se guardan hasheadas. El administrador puede resetearlas, pero no verlas.")
@@ -4582,6 +4859,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.0 beta 2", "Edición de registros del Paso 4 y pulido del PDF de consulta para turnos y observaciones."),
         ("DCD 1.2.0 beta 3", "Corrección de carga de registros en modo edición antes del renderizado de widgets Streamlit."),
         ("DCD 1.2.0 RC1", "Versión candidata estable: turnos y observaciones validados en rol usuario, admin, consulta, Excel y PDF."),
+        ("DCD 1.2.1 beta 1", "Nueva fase: configuración admin de centros multiusuario, usuarios previstos y asignaciones por centro."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
@@ -4596,7 +4874,7 @@ def page_admin_consolidado() -> None:
             st.rerun()
         return
 
-    tab_consolidado, tab_publicaciones, tab_cierre, tab_calidad, tab_usuarios, tab_auditoria, tab_historial = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Calidad de datos", "Usuarios", "Auditoría/Backup", "Historial versiones"])
+    tab_consolidado, tab_publicaciones, tab_cierre, tab_calidad, tab_usuarios, tab_multiusuario, tab_auditoria, tab_historial = st.tabs(["Consolidado", "Publicaciones", "Cierre", "Calidad de datos", "Usuarios", "Multiusuario", "Auditoría/Backup", "Historial versiones"])
     with tab_consolidado:
         render_admin_consolidado()
     with tab_publicaciones:
@@ -4607,6 +4885,8 @@ def page_admin_consolidado() -> None:
         render_admin_calidad_datos()
     with tab_usuarios:
         render_admin_usuarios()
+    with tab_multiusuario:
+        render_admin_multiusuario_centros()
     with tab_auditoria:
         render_admin_auditoria_backup()
     with tab_historial:
