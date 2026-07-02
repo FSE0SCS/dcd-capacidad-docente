@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.1 beta 4
+# Versión: DCD 1.2.2 beta 1
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.1 beta 4"
+APP_VERSION = "DCD 1.2.2 beta 1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -123,6 +123,7 @@ CONSULTA_EXCEL_SHEETS = [
     "Turnos_Resumen_Isla",
     "Turnos_Detalle",
     "Observaciones_Titulacion",
+    "Detalle_Alumnos",
     "Matriz_DCD",
 ]
 
@@ -297,6 +298,8 @@ DESLIZANTE_DB_MAP = {
 
 OBS_TITULACION_DISPLAY = "Observaciones titulación"
 OBS_TITULACION_DB = "observaciones_titulacion"
+DETALLE_ALUMNOS_DISPLAY = "Detalle alumnos"
+DETALLE_ALUMNOS_DB = "detalle_alumnos"
 TURNO_DIA_OPTIONS = ["", "M", "T", "R"]
 
 
@@ -334,6 +337,7 @@ def init_session_state() -> None:
         "deslizante_jueves": "",
         "deslizante_viernes": "",
         "observaciones_titulacion": "",
+        "detalle_alumnos": [],
         "codigo_borrador": "",
         "codigo_expediente": "",
         "version_num": 0,
@@ -348,6 +352,93 @@ def init_session_state() -> None:
         if key not in st.session_state:
             st.session_state[key] = value
 
+
+
+def normalizar_detalle_alumnos(value, total: int | None = None) -> list[dict]:
+    """Normaliza el detalle opcional por alumno.
+
+    Formato interno/JSON:
+    [{"alumno": 1, "servicio": "...", "curso": "..."}, ...]
+    Solo se conservan filas con servicio o curso informado, salvo que se solicite
+    expansión a un total para pintar el formulario.
+    """
+    data = []
+    if value is None or value == "":
+        data = []
+    elif isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            data = parsed if isinstance(parsed, list) else []
+        except Exception:
+            data = []
+    elif isinstance(value, list):
+        data = value
+    else:
+        data = []
+
+    por_alumno: dict[int, dict] = {}
+    for idx, entry in enumerate(data, start=1):
+        if not isinstance(entry, dict):
+            continue
+        alumno = safe_int(entry.get("alumno") or entry.get("Alumno") or idx, idx)
+        if alumno <= 0:
+            alumno = idx
+        servicio = str(entry.get("servicio") or entry.get("Servicio") or "").strip()
+        curso = str(entry.get("curso") or entry.get("Curso") or entry.get("Curso/año") or "").strip()
+        if servicio or curso or total is not None:
+            por_alumno[alumno] = {"alumno": alumno, "servicio": servicio, "curso": curso}
+
+    if total is not None:
+        total = max(safe_int(total, 0), 0)
+        return [por_alumno.get(i, {"alumno": i, "servicio": "", "curso": ""}) for i in range(1, total + 1)]
+
+    return [por_alumno[k] for k in sorted(por_alumno) if por_alumno[k].get("servicio") or por_alumno[k].get("curso")]
+
+
+def limpiar_detalle_alumnos_widgets() -> None:
+    """Limpia los campos dinámicos de detalle por alumno del formulario."""
+    for key in list(st.session_state.keys()):
+        if key.startswith("detalle_alumno_servicio_") or key.startswith("detalle_alumno_curso_"):
+            del st.session_state[key]
+    st.session_state.detalle_alumnos = []
+
+
+def preparar_detalle_alumnos_widgets(total: int, detalle: list[dict] | None = None) -> None:
+    """Inicializa, sin sobrescribir lo ya escrito, los widgets de detalle por alumno."""
+    total = max(safe_int(total, 0), 0)
+    detalle_norm = normalizar_detalle_alumnos(detalle if detalle is not None else st.session_state.get("detalle_alumnos", []), total=total)
+    for entry in detalle_norm:
+        alumno = safe_int(entry.get("alumno", 0), 0)
+        if alumno <= 0:
+            continue
+        servicio_key = f"detalle_alumno_servicio_{alumno}"
+        curso_key = f"detalle_alumno_curso_{alumno}"
+        if servicio_key not in st.session_state:
+            st.session_state[servicio_key] = str(entry.get("servicio", "") or "")
+        if curso_key not in st.session_state:
+            st.session_state[curso_key] = str(entry.get("curso", "") or "")
+
+
+def recoger_detalle_alumnos_desde_widgets(total: int) -> list[dict]:
+    """Recoge solo las filas voluntarias cumplimentadas de Servicio/Curso por alumno."""
+    total = max(safe_int(total, 0), 0)
+    rows = []
+    for alumno in range(1, total + 1):
+        servicio = str(st.session_state.get(f"detalle_alumno_servicio_{alumno}", "") or "").strip()
+        curso = str(st.session_state.get(f"detalle_alumno_curso_{alumno}", "") or "").strip()
+        if servicio or curso:
+            rows.append({"alumno": alumno, "servicio": servicio, "curso": curso})
+    return rows
+
+
+def dataframe_excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """Convierte listas/dicts a texto JSON para que Excel/XlsxWriter no falle."""
+    if df is None:
+        return pd.DataFrame()
+    out = df.copy()
+    for col in out.columns:
+        out[col] = out[col].apply(lambda v: json.dumps(make_json_safe(v), ensure_ascii=False) if isinstance(v, (list, dict)) else v)
+    return out
 
 def reset_selectores_estudio() -> None:
     st.session_state.sel_nivel_i = ""
@@ -365,6 +456,7 @@ def reset_selectores_estudio() -> None:
     st.session_state.deslizante_jueves = ""
     st.session_state.deslizante_viernes = ""
     st.session_state.observaciones_titulacion = ""
+    limpiar_detalle_alumnos_widgets()
 
 
 def cargar_registro_en_formulario(item: dict) -> None:
@@ -390,6 +482,10 @@ def cargar_registro_en_formulario(item: dict) -> None:
     st.session_state.deslizante_jueves = str(item.get("Deslizante jueves", "") or "")
     st.session_state.deslizante_viernes = str(item.get("Deslizante viernes", "") or "")
     st.session_state.observaciones_titulacion = str(item.get(OBS_TITULACION_DISPLAY, "") or "")
+    limpiar_detalle_alumnos_widgets()
+    detalle = normalizar_detalle_alumnos(item.get(DETALLE_ALUMNOS_DISPLAY, []), total=safe_int(item.get("Nº alumnos", 0)))
+    st.session_state.detalle_alumnos = normalizar_detalle_alumnos(detalle)
+    preparar_detalle_alumnos_widgets(safe_int(item.get("Nº alumnos", 0)), detalle)
 
 
 def aplicar_edicion_pendiente_en_formulario() -> None:
@@ -510,6 +606,7 @@ def registro_from_db_row(row: dict) -> dict:
         "Deslizante jueves": row.get("deslizante_jueves", "") or "",
         "Deslizante viernes": row.get("deslizante_viernes", "") or "",
         OBS_TITULACION_DISPLAY: row.get("observaciones_titulacion", "") or "",
+        DETALLE_ALUMNOS_DISPLAY: normalizar_detalle_alumnos(row.get("detalle_alumnos", [])),
     }
     return item
 
@@ -519,6 +616,7 @@ def registro_to_db_extra_fields(item: dict) -> dict:
     for display_col, db_col in DESLIZANTE_DB_MAP.items():
         out[db_col] = str(item.get(display_col, "") or "").strip()
     out[OBS_TITULACION_DB] = str(item.get(OBS_TITULACION_DISPLAY, "") or "").strip()
+    out[DETALLE_ALUMNOS_DB] = normalizar_detalle_alumnos(item.get(DETALLE_ALUMNOS_DISPLAY, []))
     return out
 
 
@@ -618,6 +716,57 @@ def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         "Observaciones_Titulacion": obs.reset_index(drop=True),
         "Observaciones_Titulacion_PDF": obs_pdf.reset_index(drop=True),
     }
+
+
+def build_detalle_alumnos_table(registros_df: pd.DataFrame) -> pd.DataFrame:
+    """Construye la hoja Detalle_Alumnos para Excel admin/consulta.
+
+    No se incorpora al dashboard ni al cuerpo principal del PDF para evitar saturación.
+    Solo lista los alumnos para los que el centro haya informado Servicio y/o Curso/año.
+    """
+    cols = [
+        "Código borrador", "Fecha guardado", "Área", "Centro docente", "Usuario aportación",
+        "Nivel Estudio I", "Nivel Estudio II", "Rama", "Titulación",
+        "Alumno", "Servicio", "Curso/año", "Nº alumnos titulación",
+        "Alumnos mañana", "Alumnos tarde", "Alumnos rotatorio", "Alumnos deslizante",
+        OBS_TITULACION_DISPLAY,
+    ]
+    if registros_df is None or registros_df.empty:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for _, row in registros_df.iterrows():
+        detalle = normalizar_detalle_alumnos(row.get(DETALLE_ALUMNOS_DISPLAY, []))
+        if not detalle:
+            continue
+        for entry in detalle:
+            servicio = str(entry.get("servicio", "") or "").strip()
+            curso = str(entry.get("curso", "") or "").strip()
+            if not servicio and not curso:
+                continue
+            rows.append({
+                "Código borrador": row.get("Código borrador", ""),
+                "Fecha guardado": row.get("Fecha guardado", ""),
+                "Área": row.get("Área", ""),
+                "Centro docente": row.get("Centro docente", ""),
+                "Usuario aportación": row.get("Usuario aportación", row.get("Usuario", "")),
+                "Nivel Estudio I": row.get("Nivel Estudio I", ""),
+                "Nivel Estudio II": row.get("Nivel Estudio II", ""),
+                "Rama": row.get("Rama", ""),
+                "Titulación": row.get("Titulación", ""),
+                "Alumno": safe_int(entry.get("alumno", 0)),
+                "Servicio": servicio,
+                "Curso/año": curso,
+                "Nº alumnos titulación": safe_int(row.get("Nº alumnos", 0)),
+                "Alumnos mañana": safe_int(row.get("Alumnos mañana", 0)),
+                "Alumnos tarde": safe_int(row.get("Alumnos tarde", 0)),
+                "Alumnos rotatorio": safe_int(row.get("Alumnos rotatorio", 0)),
+                "Alumnos deslizante": safe_int(row.get("Alumnos deslizante", 0)),
+                OBS_TITULACION_DISPLAY: row.get(OBS_TITULACION_DISPLAY, ""),
+            })
+    if not rows:
+        return pd.DataFrame(columns=cols)
+    return pd.DataFrame(rows, columns=cols)
 
 
 # =========================================================
@@ -1296,10 +1445,13 @@ def build_output_excel() -> bytes:
             registros_df.insert(2, "Área", st.session_state.area_selected)
             registros_df.insert(3, "Centro docente", unidad)
             registros_df.insert(4, "Usuario", usuario)
-        registros_df.to_excel(writer, sheet_name="Registros_DCD", index=False)
         turnos_tables = build_turnos_tables(registros_df)
+        detalle_alumnos = build_detalle_alumnos_table(registros_df)
+        registros_df_excel = dataframe_excel_safe(registros_df)
+        registros_df_excel.to_excel(writer, sheet_name="Registros_DCD", index=False)
         turnos_tables["Turnos_Detalle"].to_excel(writer, sheet_name="Turnos_Detalle", index=False)
         turnos_tables["Observaciones_Titulacion"].to_excel(writer, sheet_name="Observaciones_Titulacion", index=False)
+        detalle_alumnos.to_excel(writer, sheet_name="Detalle_Alumnos", index=False)
         matriz.to_excel(writer, sheet_name="Matriz_DCD", index=False)
 
         workbook = writer.book
@@ -1316,9 +1468,10 @@ def build_output_excel() -> bytes:
 
         local_sheets = {
             "Resumen": resumen,
-            "Registros_DCD": registros_df,
+            "Registros_DCD": registros_df_excel,
             "Turnos_Detalle": turnos_tables["Turnos_Detalle"],
             "Observaciones_Titulacion": turnos_tables["Observaciones_Titulacion"],
+            "Detalle_Alumnos": detalle_alumnos,
             "Matriz_DCD": matriz,
         }
         for sheet_name, df_sheet in local_sheets.items():
@@ -2455,14 +2608,17 @@ def build_publication_package() -> tuple[bool, str, dict | None]:
                 "Área": normalizar_area(borrador.get("area", "")),
                 "Centro docente": unidad,
                 "Columna Excel": columna_excel,
+                "Usuario aportación": row.get("usuario_aportacion", "") or row.get("usuario_propietario", ""),
                 **item,
             })
 
     analytics = build_analytics_tables(matriz, status_df)
     registros_df = pd.DataFrame(registros_consolidados)
     turnos_tables = build_turnos_tables(registros_df)
+    detalle_alumnos = build_detalle_alumnos_table(registros_df)
     quality_tables = build_quality_tables(matriz, registros_df, status_df, duplicados)
     analytics.update(turnos_tables)
+    analytics["Detalle_Alumnos"] = detalle_alumnos
     analytics.update(quality_tables)
 
     ok_xlsx, msg_xlsx, excel_bytes, excel_filename = build_consolidated_excel_from_supabase()
@@ -3203,6 +3359,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
                     "Área": normalizar_area(borrador.get("area", "")),
                     "Centro docente": unidad,
                     "Columna Excel": columna_excel,
+                    "Usuario aportación": row.get("usuario_aportacion", "") or row.get("usuario_propietario", ""),
                     **item,
                 })
 
@@ -3252,6 +3409,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
         analytics = build_analytics_tables(matriz, status_df)
         quality_tables = build_quality_tables(matriz, registros_df, status_df, duplicados)
         turnos_tables = build_turnos_tables(registros_df)
+        detalle_alumnos = build_detalle_alumnos_table(registros_df)
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -3274,6 +3432,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
                 "Turnos_Detalle_PDF": turnos_tables.get("Turnos_Detalle_PDF", pd.DataFrame()),
                 "Observaciones_Titulacion": turnos_tables["Observaciones_Titulacion"],
                 "Observaciones_Titulacion_PDF": turnos_tables.get("Observaciones_Titulacion_PDF", pd.DataFrame()),
+                "Detalle_Alumnos": detalle_alumnos,
                 "Calidad_Resumen": quality_tables["Calidad_Resumen"],
                 "Calidad_Pendientes": quality_tables["Calidad_Pendientes"],
                 "Calidad_Duplicados": quality_tables["Calidad_Duplicados"],
@@ -3281,7 +3440,7 @@ def build_consolidated_excel_from_supabase() -> tuple[bool, str, bytes | None, s
                 "Calidad_Sin_Plazas": quality_tables["Calidad_Sin_Plazas"],
                 "Estado_centros": status_df,
                 "Borradores_usados": borradores_df,
-                "Registros_DCD": registros_df,
+                "Registros_DCD": dataframe_excel_safe(registros_df),
                 "Duplicados_ignorados": duplicados_df,
                 "Matriz_DCD": matriz,
             }
@@ -3810,6 +3969,38 @@ def page_entrada_datos() -> None:
         help="Campo específico por titulación/especialidad. Se mostrará en Excel y PDF de consulta.",
     )
 
+    st.markdown("#### Detalle opcional por alumno")
+    st.caption("Campos voluntarios. No introduzca nombres ni datos personales; use solo Alumno 1, Alumno 2, etc.")
+    total_detalle_form = int(st.session_state.get("numero_alumnos", 0) or 0)
+    preparar_detalle_alumnos_widgets(total_detalle_form, st.session_state.get("detalle_alumnos", []))
+    with st.expander("Servicio y curso/año por alumno", expanded=False):
+        if not bool(st.session_state.sel_titulacion):
+            st.info("Seleccione una titulación para activar el detalle por alumno.")
+        elif total_detalle_form <= 0:
+            st.info("Indique primero el número de alumnos para poder rellenar el detalle opcional.")
+        else:
+            st.info("Estos campos son voluntarios y se exportarán en la hoja Detalle_Alumnos del Excel.")
+            for alumno_idx in range(1, total_detalle_form + 1):
+                a1, a2, a3 = st.columns([1, 3, 2])
+                with a1:
+                    st.write(f"Alumno {alumno_idx}")
+                with a2:
+                    st.text_input(
+                        f"Servicio alumno {alumno_idx}",
+                        key=f"detalle_alumno_servicio_{alumno_idx}",
+                        disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion),
+                        label_visibility="collapsed",
+                        placeholder="Servicio",
+                    )
+                with a3:
+                    st.text_input(
+                        f"Curso/año alumno {alumno_idx}",
+                        key=f"detalle_alumno_curso_{alumno_idx}",
+                        disabled=edicion_bloqueada or not bool(st.session_state.sel_titulacion),
+                        label_visibility="collapsed",
+                        placeholder="Curso/año",
+                    )
+
     col_add, col_clear, col_cancel = st.columns(3)
     with col_add:
         boton_registro = "Actualizar registro" if editing_mode else "Añadir registro"
@@ -3857,6 +4048,7 @@ def page_entrada_datos() -> None:
                     "Deslizante jueves": st.session_state.get("deslizante_jueves", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
                     "Deslizante viernes": st.session_state.get("deslizante_viernes", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
                     OBS_TITULACION_DISPLAY: st.session_state.get("observaciones_titulacion", ""),
+                    DETALLE_ALUMNOS_DISPLAY: recoger_detalle_alumnos_desde_widgets(total_form),
                 }
                 audit_event("registro_actualizado", f"{st.session_state.sel_titulacion} | {int(st.session_state.numero_alumnos)} alumnos | turnos {suma_turnos_form}")
                 if editing_mode:
@@ -5226,6 +5418,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.1 beta 2", "Estado de aportaciones por usuario, trazabilidad de aportación y entrada al consolidado solo cuando el centro multiusuario está completo."),
         ("DCD 1.2.1 beta 3", "Corrección de valores NaN al registrar publicaciones multiusuario en Supabase."),
         ("DCD 1.2.1 beta 4", "Consolidación parcial manual por admin para centros multiusuario incompletos."),
+        ("DCD 1.2.2 beta 1", "Servicios y curso/año voluntarios por alumno, con exportación a Excel en hoja Detalle_Alumnos."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)

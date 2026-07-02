@@ -86,3 +86,12 @@ Versión beta para validar la configuración administrativa de centros multiusua
 - Añade consolidación parcial manual por administrador para centros multiusuario incompletos.
 - Permite que entren al consolidado general las aportaciones finalizadas cuando falten usuarios, dejando trazabilidad de usuarios pendientes, motivo y administrador responsable.
 - No requiere SQL nuevo.
+
+
+## DCD 1.2.2 beta 1
+
+- Añadido detalle opcional por alumno en el Paso 4: Servicio y Curso/año.
+- Persistencia en `detalle_alumnos` como JSONB en borradores y registros.
+- Edición y recuperación de detalle por alumno en registros existentes.
+- Nueva hoja `Detalle_Alumnos` en Excel admin y Excel de consulta.
+- No se modifica el Dashboard ni se incorpora al PDF principal en esta beta.

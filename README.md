@@ -452,3 +452,12 @@ Se inicia la fase multiusuario por centro docente. La primera beta añade una pe
 - Corrección del registro de publicaciones en Supabase cuando existen valores NaN/NaT procedentes de tablas Pandas.
 - No requiere cambios SQL.
 - No modifica lógica de cálculo, Excel ni PDF.
+
+
+## DCD 1.2.2 beta 1
+
+- Añadido detalle opcional por alumno en el Paso 4: Servicio y Curso/año.
+- Persistencia en `detalle_alumnos` como JSONB en borradores y registros.
+- Edición y recuperación de detalle por alumno en registros existentes.
+- Nueva hoja `Detalle_Alumnos` en Excel admin y Excel de consulta.
+- No se modifica el Dashboard ni se incorpora al PDF principal en esta beta.
