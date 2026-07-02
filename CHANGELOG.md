@@ -100,3 +100,9 @@
 - Corrección del registro de publicaciones en Supabase cuando existen valores NaN/NaT procedentes de tablas Pandas.
 - No requiere cambios SQL.
 - No modifica lógica de cálculo, Excel ni PDF.
+
+## DCD 1.2.1 beta 4
+
+- Añade consolidación parcial manual por administrador para centros multiusuario incompletos.
+- Permite que entren al consolidado general las aportaciones finalizadas cuando falten usuarios, dejando trazabilidad de usuarios pendientes, motivo y administrador responsable.
+- No requiere SQL nuevo.

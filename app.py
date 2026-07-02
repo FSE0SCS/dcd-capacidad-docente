@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.1 beta 3
+# Versión: DCD 1.2.1 beta 4
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.1 beta 3"
+APP_VERSION = "DCD 1.2.1 beta 4"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -1350,7 +1350,7 @@ def build_output_excel() -> bytes:
 def get_latest_finalized_drafts() -> tuple[list[dict], list[dict]]:
     """Devuelve los expedientes finalizados que deben entrar en el consolidado.
 
-    Regla DCD 1.2.1 beta 2:
+    Regla DCD 1.2.1 beta 4:
     - Centros ordinarios: se mantiene el criterio histórico de última versión finalizada por centro.
     - Centros multiusuario activos: se toma la última aportación finalizada de cada usuario activo asignado,
       pero solo cuando todos los usuarios activos asignados han finalizado. Si falta algún usuario,
@@ -1412,9 +1412,15 @@ def get_latest_finalized_drafts() -> tuple[list[dict], list[dict]]:
         if len(finalized_users) >= expected and all(u in finalized_users for u in active_users):
             selected.extend([latest_by_multi_user[(centro, u)] for u in active_users])
         else:
-            # El centro queda pendiente. Las aportaciones finalizadas se conservan, pero no entran todavía.
-            for u in finalized_users:
-                duplicates.append(latest_by_multi_user[(centro, u)])
+            partial_auth = get_latest_multiusuario_consolidation(centro)
+            if partial_auth and bool(partial_auth.get("consolidacion_parcial", False)) and finalized_users:
+                # DCD 1.2.1 beta 4: el admin puede autorizar que entren las aportaciones finalizadas
+                # aunque falten usuarios, dejando trazabilidad de consolidación parcial.
+                selected.extend([latest_by_multi_user[(centro, u)] for u in finalized_users])
+            else:
+                # El centro queda pendiente. Las aportaciones finalizadas se conservan, pero no entran todavía.
+                for u in finalized_users:
+                    duplicates.append(latest_by_multi_user[(centro, u)])
 
     return selected, duplicates
 
@@ -1459,9 +1465,13 @@ def get_admin_centros_status() -> tuple[pd.DataFrame, list[str]]:
                     finalized_by_user[user] = v
             done = len(finalized_by_user)
             complete = bool(active_users) and done >= expected_users and all(u in finalized_by_user for u in active_users)
+            partial_auth = get_latest_multiusuario_consolidation(centro)
             if complete:
                 estado = f"Multiusuario finalizado ({done}/{expected_users})"
                 entra = "Sí"
+            elif partial_auth and bool(partial_auth.get("consolidacion_parcial", False)) and done > 0:
+                estado = f"Multiusuario consolidado parcial ({done}/{expected_users})"
+                entra = "Sí (parcial)"
             elif versions:
                 estado = f"Multiusuario pendiente ({done}/{expected_users})"
                 entra = "No"
@@ -2846,7 +2856,7 @@ def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) 
             "centros_incluidos": centros_incluidos,
             "centros_pendientes": centros_pendientes,
             "centros_con_borrador_no_finalizado": estado_centros,
-            "observaciones": "Publicación vigente generada desde DCD 1.2.1 beta 3.",
+            "observaciones": "Publicación vigente generada desde DCD 1.2.1 beta 4.",
         })
         client.table("dcd_publicaciones").insert(payload_publicacion).execute()
         audit_event("publicacion_generada", f"{codigo_publicacion}. Pendientes: {len(missing)}")
@@ -4543,6 +4553,123 @@ def sync_multiusuario_assignments(centro_docente: str, usernames: list[str]) -> 
         return False, f"Error al sincronizar usuarios del centro: {exc}"
 
 
+
+
+def get_multiusuario_progress(centro_docente: str) -> dict:
+    """Devuelve el estado operativo de un centro multiusuario.
+
+    Esta función no modifica datos. Se usa para saber qué usuarios activos
+    asignados han finalizado su aportación y cuáles siguen pendientes.
+    """
+    client = get_supabase_client()
+    cfg = get_multiusuario_config(centro_docente)
+    assignments = [
+        a for a in list_multiusuario_assignments(centro_docente)
+        if a.get("activo") and a.get("username")
+    ]
+    active_users = [str(a.get("username", "")).strip().lower() for a in assignments if a.get("username")]
+    expected = int(cfg.get("usuarios_previstos") or len(active_users) or 1)
+    latest_by_user: dict[str, dict] = {}
+
+    if client is not None:
+        for username in active_users:
+            try:
+                resp = client.table("dcd_borradores").select("*").eq("unidad_docente", centro_docente).eq("usuario_propietario", username).eq("estado", "finalizado").order("saved_at", desc=True).order("updated_at", desc=True).limit(1).execute()
+                rows = getattr(resp, "data", []) or []
+                if rows:
+                    latest_by_user[username] = rows[0]
+            except Exception:
+                pass
+
+    finalized_users = [u for u in active_users if u in latest_by_user]
+    pending_users = [u for u in active_users if u not in latest_by_user]
+    complete = bool(active_users) and len(finalized_users) >= expected and all(u in finalized_users for u in active_users)
+    return {
+        "config": cfg,
+        "assignments": assignments,
+        "active_users": active_users,
+        "expected": expected,
+        "latest_by_user": latest_by_user,
+        "finalized_users": finalized_users,
+        "pending_users": pending_users,
+        "complete": complete,
+    }
+
+
+def get_latest_multiusuario_consolidation(centro_docente: str) -> dict:
+    """Devuelve la última consolidación operativa registrada para un centro.
+
+    Se considera operativa si su estado es consolidado o consolidado_parcial.
+    No se usa para centros no multiusuario.
+    """
+    client = get_supabase_client()
+    if client is None or not centro_docente:
+        return {}
+    try:
+        resp = client.table("dcd_centros_multiusuario_consolidados").select("*").eq("centro_docente", centro_docente).order("created_at", desc=True).limit(10).execute()
+        rows = getattr(resp, "data", []) or []
+        for row in rows:
+            if str(row.get("estado", "")).lower() in {"consolidado", "consolidado_parcial"}:
+                return row
+    except Exception as exc:
+        st.session_state["last_multiusuario_error"] = str(exc)
+    return {}
+
+
+def create_partial_multiusuario_consolidation(centro_docente: str, motivo: str = "") -> tuple[bool, str]:
+    """Autoriza que un centro multiusuario entre parcialmente en el consolidado.
+
+    No crea datos nuevos ni suma registros en tablas intermedias. Registra una autorización
+    administrativa para que, al generar publicación/consolidado, entren las aportaciones
+    finalizadas disponibles aunque falten usuarios asignados.
+    """
+    client = get_supabase_client()
+    if client is None:
+        return False, "La Base de Datos no está configurada."
+    if not centro_docente:
+        return False, "Debe seleccionar un centro docente."
+
+    progress = get_multiusuario_progress(centro_docente)
+    cfg = progress.get("config", {}) or {}
+    if not bool(cfg.get("multiusuario_activo", False)):
+        return False, "El centro no está marcado como multiusuario."
+    if not bool(cfg.get("permite_consolidacion_parcial", True)):
+        return False, "La consolidación parcial no está permitida para este centro."
+
+    finalized_users = progress.get("finalized_users", []) or []
+    pending_users = progress.get("pending_users", []) or []
+    expected = int(progress.get("expected") or 1)
+
+    if progress.get("complete"):
+        return False, "El centro ya está completo; no necesita consolidación parcial."
+    if not finalized_users:
+        return False, "No hay aportaciones finalizadas para consolidar parcialmente."
+
+    codigo = f"CONS-{safe_code(centro_docente)}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    payload = {
+        "centro_docente": centro_docente,
+        "codigo_consolidado": codigo,
+        "estado": "consolidado_parcial",
+        "total_usuarios_previstos": expected,
+        "total_usuarios_finalizados": len(finalized_users),
+        "consolidacion_parcial": True,
+        "usuarios_pendientes": ", ".join(pending_users),
+        "consolidado_por": st.session_state.get("current_user", "admin"),
+        "motivo_consolidacion": motivo or "Consolidación parcial autorizada por administrador.",
+        "created_at": datetime.now().isoformat(),
+        "updated_at": datetime.now().isoformat(),
+    }
+    try:
+        client.table("dcd_centros_multiusuario_consolidados").insert(payload).execute()
+        audit_event(
+            "consolidacion_parcial_multiusuario",
+            f"Centro: {centro_docente} | Finalizados: {len(finalized_users)}/{expected} | Pendientes: {', '.join(pending_users)}",
+            codigo,
+        )
+        return True, f"Consolidación parcial registrada para {centro_docente}. Entrarán {len(finalized_users)} aportaciones finalizadas."
+    except Exception as exc:
+        return False, f"Error al registrar consolidación parcial: {exc}"
+
 def build_multiusuario_estado_df(centro_docente: str, assignments: list[dict]) -> pd.DataFrame:
     if not assignments:
         return pd.DataFrame(columns=["Usuario", "Activo", "Orden", "Estado aportación", "Último finalizado", "Fecha finalización", "Registros"])
@@ -4585,8 +4712,8 @@ def build_multiusuario_estado_df(centro_docente: str, assignments: list[dict]) -
 def render_admin_multiusuario_centros() -> None:
     st.subheader("Multiusuario por centro docente")
     st.info(
-        "Esta primera beta permite configurar qué centros funcionarán en modo multiusuario y qué usuarios pertenecen a cada centro. "
-        "La consolidación automática del centro se implementará en la siguiente fase, tras validar esta configuración."
+        "Esta beta permite configurar centros multiusuario, revisar el estado de aportaciones por usuario "
+        "y autorizar una consolidación parcial si llega la fecha límite y faltan usuarios por finalizar."
     )
 
     if not supabase_available():
@@ -4711,9 +4838,56 @@ def render_admin_multiusuario_centros() -> None:
     else:
         st.info("No hay usuarios asignados a este centro todavía.")
 
+    if multi_activo:
+        st.markdown("### Consolidación del centro multiusuario")
+        progress = get_multiusuario_progress(centro_sel)
+        expected = int(progress.get("expected") or usuarios_previstos or 1)
+        finalized_users = progress.get("finalized_users", []) or []
+        pending_users = progress.get("pending_users", []) or []
+        partial_auth = get_latest_multiusuario_consolidation(centro_sel)
+
+        if progress.get("complete"):
+            st.success(f"Centro completo: {len(finalized_users)}/{expected} usuarios han finalizado. Entrará en el consolidado general.")
+        elif partial_auth and bool(partial_auth.get("consolidacion_parcial", False)):
+            st.warning(
+                f"Centro con consolidación parcial autorizada. Finalizados: {len(finalized_users)}/{expected}. "
+                f"Pendientes: {partial_auth.get('usuarios_pendientes', '') or ', '.join(pending_users) or 'sin pendientes identificados'}."
+            )
+            cols_auth = [c for c in ["codigo_consolidado", "estado", "total_usuarios_finalizados", "total_usuarios_previstos", "usuarios_pendientes", "consolidado_por", "created_at", "motivo_consolidacion"] if c in partial_auth]
+            st.dataframe(pd.DataFrame([{c: partial_auth.get(c, "") for c in cols_auth}]), use_container_width=True, hide_index=True)
+        elif finalized_users:
+            st.warning(
+                f"Centro pendiente: {len(finalized_users)}/{expected} usuarios han finalizado. "
+                f"Pendientes: {', '.join(pending_users) if pending_users else 'sin pendientes identificados'}."
+            )
+            if parcial:
+                motivo_parcial = st.text_area(
+                    "Motivo de consolidación parcial",
+                    value="Consolidación parcial autorizada por fecha límite o instrucción administrativa.",
+                    key=f"multi_motivo_parcial_{safe_code(centro_sel)}",
+                )
+                confirmar_parcial = st.checkbox(
+                    "Confirmo que quiero consolidar parcialmente este centro con las aportaciones finalizadas disponibles.",
+                    key=f"multi_confirm_parcial_{safe_code(centro_sel)}",
+                )
+                if st.button("Consolidar parcialmente este centro", key=f"btn_multi_partial_{safe_code(centro_sel)}"):
+                    if not confirmar_parcial:
+                        st.error("Debe marcar la casilla de confirmación para consolidar parcialmente.")
+                    else:
+                        ok, msg = create_partial_multiusuario_consolidation(centro_sel, motivo_parcial)
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+            else:
+                st.info("La consolidación parcial no está permitida en la configuración de este centro.")
+        else:
+            st.info(f"Centro pendiente: todavía no hay aportaciones finalizadas ({len(finalized_users)}/{expected}).")
+
     st.caption(
-        "Nota: en esta beta se valida la configuración multiusuario. "
-        "La consolidación operativa del centro y su incorporación al consolidado general se añadirá en la siguiente iteración."
+        "Regla operativa: un centro multiusuario entra automáticamente en el consolidado cuando todos los usuarios activos asignados finalizan. "
+        "Si falta algún usuario, el admin puede autorizar consolidación parcial solo cuando esté permitido en la configuración del centro."
     )
 
 
@@ -5050,6 +5224,8 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.0 RC1", "Versión candidata estable: turnos y observaciones validados en rol usuario, admin, consulta, Excel y PDF."),
         ("DCD 1.2.1 beta 1", "Nueva fase: configuración admin de centros multiusuario, usuarios previstos y asignaciones por centro."),
         ("DCD 1.2.1 beta 2", "Estado de aportaciones por usuario, trazabilidad de aportación y entrada al consolidado solo cuando el centro multiusuario está completo."),
+        ("DCD 1.2.1 beta 3", "Corrección de valores NaN al registrar publicaciones multiusuario en Supabase."),
+        ("DCD 1.2.1 beta 4", "Consolidación parcial manual por admin para centros multiusuario incompletos."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
