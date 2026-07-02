@@ -108,6 +108,13 @@
 - No requiere SQL nuevo.
 
 
+
+## DCD 1.2.2 beta 2
+
+- Ajuste de visualización del campo Detalle alumnos en la tabla de registros introducidos.
+- Evita que Streamlit muestre listas internas como [object Object].
+- No modifica guardado, recuperación, Excel, PDF, Supabase ni cálculos.
+
 ## DCD 1.2.2 beta 1
 
 - Añadido detalle opcional por alumno en el Paso 4: Servicio y Curso/año.

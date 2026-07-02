@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.2 beta 1
+# Versión: DCD 1.2.2 beta 2
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.2 beta 1"
+APP_VERSION = "DCD 1.2.2 beta 2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -430,6 +430,41 @@ def recoger_detalle_alumnos_desde_widgets(total: int) -> list[dict]:
             rows.append({"alumno": alumno, "servicio": servicio, "curso": curso})
     return rows
 
+
+
+
+def formatear_detalle_alumnos_display(value) -> str:
+    """Devuelve un texto compacto para visualizar detalle_alumnos en tablas de Streamlit.
+
+    Evita que Streamlit muestre listas de diccionarios como [object Object].
+    No altera el dato real guardado ni la exportación a Excel.
+    """
+    detalle = normalizar_detalle_alumnos(value)
+    partes = []
+    for entry in detalle:
+        alumno = safe_int(entry.get("alumno", 0), 0)
+        servicio = str(entry.get("servicio", "") or "").strip()
+        curso = str(entry.get("curso", "") or "").strip()
+        if not servicio and not curso:
+            continue
+        etiqueta = f"Alumno {alumno}" if alumno else "Alumno"
+        if servicio and curso:
+            partes.append(f"{etiqueta}: {servicio} / {curso}")
+        elif servicio:
+            partes.append(f"{etiqueta}: {servicio}")
+        else:
+            partes.append(f"{etiqueta}: {curso}")
+    return "; ".join(partes)
+
+
+def preparar_registros_para_visualizacion(df: pd.DataFrame) -> pd.DataFrame:
+    """Prepara la tabla de registros introducidos para pantalla, sin tocar datos internos."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    if DETALLE_ALUMNOS_DISPLAY in out.columns:
+        out[DETALLE_ALUMNOS_DISPLAY] = out[DETALLE_ALUMNOS_DISPLAY].apply(formatear_detalle_alumnos_display)
+    return out
 
 def dataframe_excel_safe(df: pd.DataFrame) -> pd.DataFrame:
     """Convierte listas/dicts a texto JSON para que Excel/XlsxWriter no falle."""
@@ -4070,7 +4105,8 @@ def page_entrada_datos() -> None:
     registros = list(st.session_state.registros.values())
     if registros:
         registros_df = pd.DataFrame(registros)
-        st.dataframe(registros_df, use_container_width=True, hide_index=True)
+        registros_df_display = preparar_registros_para_visualizacion(registros_df)
+        st.dataframe(registros_df_display, use_container_width=True, hide_index=True)
 
         registro_labels = [
             f"{i + 1}. {r['Nivel Estudio II']} | {r['Rama']} | {r['Titulación']} | {r['Nº alumnos']} alumnos"
@@ -5419,6 +5455,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.1 beta 3", "Corrección de valores NaN al registrar publicaciones multiusuario en Supabase."),
         ("DCD 1.2.1 beta 4", "Consolidación parcial manual por admin para centros multiusuario incompletos."),
         ("DCD 1.2.2 beta 1", "Servicios y curso/año voluntarios por alumno, con exportación a Excel en hoja Detalle_Alumnos."),
+        ("DCD 1.2.2 beta 2", "Ajuste de visualización de Detalle alumnos en la tabla de registros introducidos."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)

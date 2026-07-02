@@ -454,7 +454,7 @@ Se inicia la fase multiusuario por centro docente. La primera beta añade una pe
 - No modifica lógica de cálculo, Excel ni PDF.
 
 
-## DCD 1.2.2 beta 1
+## DCD 1.2.2 beta 2
 
 - Añadido detalle opcional por alumno en el Paso 4: Servicio y Curso/año.
 - Persistencia en `detalle_alumnos` como JSONB en borradores y registros.
