@@ -1,3 +1,11 @@
+# CHANGELOG
+
+## DCD 1.2.1 beta 2
+- Rol admin entra directamente al Panel administrador.
+- Trazabilidad de aportaciones por usuario en centros multiusuario.
+- Estado de aportación por usuario en pestaña Multiusuario.
+- El consolidado general solo incorpora centros multiusuario cuando todos los usuarios activos asignados han finalizado.
+
 # CHANGELOG — DATOS CAPACIDAD DOCENTE (DCD)
 
 ## DCD 1.2.0 RC1
@@ -80,7 +88,7 @@
 - Ajuste de coordenadas y proporciones del mapa de capacidad docente por isla.
 
 
-## DCD 1.2.1 beta 1
+## DCD 1.2.1 beta 2
 
 - Añadida primera configuración administrativa de centros multiusuario.
 - Nueva pestaña admin `Multiusuario` para marcar centros, definir usuarios previstos y asignar usuarios existentes.

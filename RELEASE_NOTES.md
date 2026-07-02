@@ -70,6 +70,6 @@ git push
 Después, reiniciar la app beta en Streamlit Cloud.
 
 
-## DCD 1.2.1 beta 1 — Multiusuario por centro docente
+## DCD 1.2.1 beta 2 — Multiusuario por centro docente
 
 Versión beta para validar la configuración administrativa de centros multiusuario antes de activar la consolidación operativa.

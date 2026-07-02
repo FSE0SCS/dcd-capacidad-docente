@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.1 beta 1
+# Versión: DCD 1.2.1 beta 2
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.1 beta 1"
+APP_VERSION = "DCD 1.2.1 beta 2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -861,6 +861,11 @@ def registros_to_rows(estado: str = "borrador") -> list[dict]:
             "codigo_unidad": codigo_unidad,
             "columna_excel": columna_excel,
             "usuario_propietario": st.session_state.get("current_user", ""),
+            "usuario_aportacion": st.session_state.get("current_user", ""),
+            "centro_multiusuario": is_centro_multiusuario_activo(unidad),
+            "codigo_consolidado_centro": "",
+            "aportacion_finalizada": estado == "finalizado",
+            "fecha_finalizacion_aportacion": datetime.now().isoformat() if estado == "finalizado" else None,
             "nivel_i": item["Nivel Estudio I"],
             "nivel_ii": item["Nivel Estudio II"],
             "rama": item["Rama"],
@@ -925,6 +930,11 @@ def save_draft_to_supabase(estado: str = "borrador") -> tuple[bool, str]:
             "observaciones": st.session_state.get("observaciones", ""),
             "usuario_propietario": st.session_state.get("current_user", ""),
             "usuario_ultima_edicion": st.session_state.get("current_user", ""),
+            "usuario_aportacion": st.session_state.get("current_user", ""),
+            "centro_multiusuario": is_centro_multiusuario_activo(unidad),
+            "codigo_consolidado_centro": "",
+            "aportacion_finalizada": estado == "finalizado",
+            "fecha_finalizacion_aportacion": saved_at if estado == "finalizado" else None,
         }).execute()
 
         rows = registros_to_rows(estado=estado)
@@ -969,6 +979,8 @@ def load_draft_from_supabase(codigo_borrador: str) -> tuple[bool, str]:
         borrador = borradores[0]
         if not is_admin() and user_scope_unidad() and borrador.get("unidad_docente", "") != user_scope_unidad():
             return False, "No puede cargar un borrador de un centro docente distinto al asignado a su usuario."
+        if not is_admin() and str(borrador.get("usuario_propietario", "")).strip().lower() != str(st.session_state.get("current_user", "")).strip().lower():
+            return False, "Este borrador pertenece a otro usuario del centro. Cada usuario debe cargar y finalizar su propia aportación."
 
         registros_resp = client.table("dcd_registros").select("*").eq("codigo_borrador", codigo_borrador).execute()
         rows = getattr(registros_resp, "data", []) or []
@@ -1002,6 +1014,8 @@ def list_drafts_from_supabase() -> list[str]:
         query = client.table("dcd_borradores").select("codigo_borrador, codigo_expediente, version_num, saved_at, updated_at, estado, unidad_docente, is_latest")
         if not is_admin() and user_scope_unidad():
             query = query.eq("unidad_docente", user_scope_unidad())
+        if not is_admin():
+            query = query.eq("usuario_propietario", st.session_state.get("current_user", ""))
         resp = query.order("saved_at", desc=True).order("updated_at", desc=True).limit(100).execute()
         rows = getattr(resp, "data", []) or []
         result = []
@@ -1295,6 +1309,14 @@ def build_output_excel() -> bytes:
 
 
 def get_latest_finalized_drafts() -> tuple[list[dict], list[dict]]:
+    """Devuelve los expedientes finalizados que deben entrar en el consolidado.
+
+    Regla DCD 1.2.1 beta 2:
+    - Centros ordinarios: se mantiene el criterio histórico de última versión finalizada por centro.
+    - Centros multiusuario activos: se toma la última aportación finalizada de cada usuario activo asignado,
+      pero solo cuando todos los usuarios activos asignados han finalizado. Si falta algún usuario,
+      el centro queda pendiente y no entra todavía en el consolidado general.
+    """
     client = get_supabase_client()
     if client is None:
         return [], []
@@ -1302,18 +1324,60 @@ def get_latest_finalized_drafts() -> tuple[list[dict], list[dict]]:
     resp = client.table("dcd_borradores").select("*").eq("estado", "finalizado").order("saved_at", desc=True).order("updated_at", desc=True).execute()
     borradores = getattr(resp, "data", []) or []
 
-    latest_by_unit = {}
-    duplicates = []
+    configs = {c.get("centro_docente", ""): c for c in list_multiusuario_configs() if c.get("multiusuario_activo")}
+    multi_centros = set(configs.keys())
+    active_users_by_centro: dict[str, list[str]] = {}
+    for centro in multi_centros:
+        active_users_by_centro[centro] = [
+            str(a.get("username", "")).strip().lower()
+            for a in list_multiusuario_assignments(centro)
+            if a.get("activo") and a.get("username")
+        ]
+
+    latest_by_unit: dict[str, dict] = {}
+    latest_by_multi_user: dict[tuple[str, str], dict] = {}
+    duplicates: list[dict] = []
+
     for borrador in borradores:
         unidad = borrador.get("unidad_docente", "")
+        usuario = str(borrador.get("usuario_propietario", "") or borrador.get("usuario_aportacion", "")).strip().lower()
         if not unidad:
             continue
-        if unidad not in latest_by_unit:
-            latest_by_unit[unidad] = borrador
-        else:
-            duplicates.append(borrador)
 
-    return list(latest_by_unit.values()), duplicates
+        if unidad in multi_centros:
+            active_users = active_users_by_centro.get(unidad, [])
+            if active_users and usuario not in active_users:
+                duplicates.append(borrador)
+                continue
+            key = (unidad, usuario)
+            if key not in latest_by_multi_user:
+                latest_by_multi_user[key] = borrador
+            else:
+                duplicates.append(borrador)
+        else:
+            if unidad not in latest_by_unit:
+                latest_by_unit[unidad] = borrador
+            else:
+                duplicates.append(borrador)
+
+    selected = list(latest_by_unit.values())
+
+    for centro, cfg in configs.items():
+        active_users = active_users_by_centro.get(centro, [])
+        expected = int(cfg.get("usuarios_previstos") or len(active_users) or 1)
+        if not active_users:
+            continue
+        finalized_users = [u for u in active_users if (centro, u) in latest_by_multi_user]
+        # Para garantizar que el consolidado general no incluye centros incompletos, exigimos que finalicen
+        # todos los usuarios activos asignados y que se cubra al menos el número previsto por el admin.
+        if len(finalized_users) >= expected and all(u in finalized_users for u in active_users):
+            selected.extend([latest_by_multi_user[(centro, u)] for u in active_users])
+        else:
+            # El centro queda pendiente. Las aportaciones finalizadas se conservan, pero no entran todavía.
+            for u in finalized_users:
+                duplicates.append(latest_by_multi_user[(centro, u)])
+
+    return selected, duplicates
 
 
 def get_admin_centros_status() -> tuple[pd.DataFrame, list[str]]:
@@ -1328,6 +1392,8 @@ def get_admin_centros_status() -> tuple[pd.DataFrame, list[str]]:
     except Exception:
         borradores = []
 
+    configs = {c.get("centro_docente", ""): c for c in list_multiusuario_configs() if c.get("multiusuario_activo")}
+
     by_unit: dict[str, list[dict]] = {}
     for borrador in borradores:
         unidad = borrador.get("unidad_docente", "")
@@ -1339,6 +1405,47 @@ def get_admin_centros_status() -> tuple[pd.DataFrame, list[str]]:
     for item in expected:
         centro = item["Centro docente"]
         versions = by_unit.get(centro, [])
+        latest_any = versions[0] if versions else {}
+        finalized = [v for v in versions if v.get("estado") == "finalizado"]
+
+        if centro in configs:
+            cfg = configs.get(centro, {})
+            assignments = [a for a in list_multiusuario_assignments(centro) if a.get("activo") and a.get("username")]
+            active_users = [str(a.get("username", "")).strip().lower() for a in assignments]
+            expected_users = int(cfg.get("usuarios_previstos") or len(active_users) or 1)
+            finalized_by_user = {}
+            for v in finalized:
+                user = str(v.get("usuario_propietario", "") or v.get("usuario_aportacion", "")).strip().lower()
+                if user and user in active_users and user not in finalized_by_user:
+                    finalized_by_user[user] = v
+            done = len(finalized_by_user)
+            complete = bool(active_users) and done >= expected_users and all(u in finalized_by_user for u in active_users)
+            if complete:
+                estado = f"Multiusuario finalizado ({done}/{expected_users})"
+                entra = "Sí"
+            elif versions:
+                estado = f"Multiusuario pendiente ({done}/{expected_users})"
+                entra = "No"
+                missing.append(centro)
+            else:
+                estado = f"Multiusuario sin datos (0/{expected_users})"
+                entra = "No"
+                missing.append(centro)
+            latest_finalized = max(finalized_by_user.values(), key=lambda x: x.get("saved_at") or x.get("updated_at") or "", default={}) if finalized_by_user else {}
+            rows.append({
+                **item,
+                "Estado": estado,
+                "Última versión guardada": latest_any.get("codigo_borrador", ""),
+                "Fecha último guardado": latest_any.get("saved_at") or latest_any.get("updated_at", ""),
+                "Último finalizado": latest_finalized.get("codigo_borrador", ""),
+                "Fecha último finalizado": latest_finalized.get("saved_at") or latest_finalized.get("updated_at", ""),
+                "Entra en consolidado": entra,
+                "Versiones guardadas": len(versions),
+                "Usuarios previstos": expected_users,
+                "Usuarios finalizados": done,
+            })
+            continue
+
         latest_any = versions[0] if versions else {}
         finalized = [v for v in versions if v.get("estado") == "finalizado"]
         latest_finalized = finalized[0] if finalized else {}
@@ -3278,7 +3385,12 @@ def page_login() -> None:
         ok, msg = login_user(username, password)
         if ok:
             audit_event("login", "Inicio de sesión correcto")
-            st.session_state.current_step = 1
+            # DCD 1.2.1 beta 2: el rol admin entra directamente al panel administrador.
+            # Los usuarios de centro mantienen el flujo normal de instrucciones/entrada de datos.
+            if st.session_state.get("current_user_role") == "admin":
+                st.session_state.current_step = 6
+            else:
+                st.session_state.current_step = 1
             st.rerun()
         else:
             st.error(msg)
@@ -4280,6 +4392,29 @@ def get_multiusuario_config(centro_docente: str) -> dict:
         return {}
 
 
+def is_centro_multiusuario_activo(centro_docente: str) -> bool:
+    """Indica si un centro está configurado como multiusuario.
+
+    Devuelve False ante cualquier problema para no bloquear el flujo ordinario.
+    """
+    try:
+        cfg = get_multiusuario_config(centro_docente)
+        return bool(cfg.get("multiusuario_activo", False))
+    except Exception:
+        return False
+
+
+def list_active_multiusuario_usernames(centro_docente: str) -> list[str]:
+    try:
+        return [
+            str(a.get("username", "")).strip().lower()
+            for a in list_multiusuario_assignments(centro_docente)
+            if a.get("activo") and a.get("username")
+        ]
+    except Exception:
+        return []
+
+
 def save_multiusuario_config(
     centro_docente: str,
     area: str,
@@ -4367,20 +4502,29 @@ def sync_multiusuario_assignments(centro_docente: str, usernames: list[str]) -> 
 
 def build_multiusuario_estado_df(centro_docente: str, assignments: list[dict]) -> pd.DataFrame:
     if not assignments:
-        return pd.DataFrame(columns=["Usuario", "Activo", "Orden", "Estado aportación", "Registros finalizados"])
+        return pd.DataFrame(columns=["Usuario", "Activo", "Orden", "Estado aportación", "Último finalizado", "Fecha finalización", "Registros"])
     client = get_supabase_client()
     rows = []
     for a in assignments:
         username = str(a.get("username", "")).strip().lower()
-        finalizados = 0
+        registros = 0
+        codigo_finalizado = ""
+        fecha_finalizacion = ""
         estado = "Pendiente"
         if client is not None and username:
             try:
-                resp = client.table("dcd_registros").select("id").eq("unidad_docente", centro_docente).eq("usuario_propietario", username).eq("estado", "finalizado").execute()
-                data = getattr(resp, "data", []) or []
-                finalizados = len(data)
-                if finalizados > 0:
-                    estado = "Con aportación finalizada"
+                borr_resp = client.table("dcd_borradores").select("codigo_borrador,saved_at,updated_at,estado").eq("unidad_docente", centro_docente).eq("usuario_propietario", username).eq("estado", "finalizado").order("saved_at", desc=True).order("updated_at", desc=True).limit(1).execute()
+                borr_rows = getattr(borr_resp, "data", []) or []
+                if borr_rows:
+                    codigo_finalizado = borr_rows[0].get("codigo_borrador", "")
+                    fecha_finalizacion = borr_rows[0].get("saved_at") or borr_rows[0].get("updated_at") or ""
+                    estado = "Aportación finalizada"
+                    reg_resp = client.table("dcd_registros").select("id").eq("codigo_borrador", codigo_finalizado).execute()
+                    registros = len(getattr(reg_resp, "data", []) or [])
+                else:
+                    draft_resp = client.table("dcd_borradores").select("codigo_borrador").eq("unidad_docente", centro_docente).eq("usuario_propietario", username).limit(1).execute()
+                    if getattr(draft_resp, "data", []) or []:
+                        estado = "Con borrador pendiente"
             except Exception:
                 pass
         rows.append({
@@ -4388,7 +4532,9 @@ def build_multiusuario_estado_df(centro_docente: str, assignments: list[dict]) -
             "Activo": "Sí" if a.get("activo") else "No",
             "Orden": a.get("orden_participante", ""),
             "Estado aportación": estado,
-            "Registros finalizados": finalizados,
+            "Último finalizado": codigo_finalizado,
+            "Fecha finalización": fecha_finalizacion,
+            "Registros": registros,
         })
     return pd.DataFrame(rows)
 
@@ -4860,6 +5006,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.0 beta 3", "Corrección de carga de registros en modo edición antes del renderizado de widgets Streamlit."),
         ("DCD 1.2.0 RC1", "Versión candidata estable: turnos y observaciones validados en rol usuario, admin, consulta, Excel y PDF."),
         ("DCD 1.2.1 beta 1", "Nueva fase: configuración admin de centros multiusuario, usuarios previstos y asignaciones por centro."),
+        ("DCD 1.2.1 beta 2", "Estado de aportaciones por usuario, trazabilidad de aportación y entrada al consolidado solo cuando el centro multiusuario está completo."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
