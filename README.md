@@ -445,3 +445,10 @@ Corrección visual y de presentación para rol consulta: PDF de consulta sin cal
 ### DCD 1.2.1 beta 2
 
 Se inicia la fase multiusuario por centro docente. La primera beta añade una pestaña administrativa para configurar centros multiusuario y asignar usuarios existentes.
+
+
+## DCD 1.2.1 beta 3
+
+- Corrección del registro de publicaciones en Supabase cuando existen valores NaN/NaT procedentes de tablas Pandas.
+- No requiere cambios SQL.
+- No modifica lógica de cálculo, Excel ni PDF.

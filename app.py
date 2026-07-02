@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.1 beta 2
+# Versión: DCD 1.2.1 beta 3
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.1 beta 2"
+APP_VERSION = "DCD 1.2.1 beta 3"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -67,6 +67,45 @@ LOGO_PATH = ASSETS_DIR / "logo.png"
 MAPA_CANARIAS_PATH = ASSETS_DIR / "mapa_canarias.png"
 INSTITUTIONAL_PHRASE = "Informe desarrollado para la gestión y análisis de los Datos de Capacidad Docente del Servicio Canario de la Salud."
 SIGNATURE_FOOTER = "Jefatura del Servicio de Formacion Sanitaria Especializada"
+
+
+def make_json_safe(value):
+    """Convierte estructuras Python/Pandas en JSON válido para Supabase.
+
+    Pandas puede generar NaN/NaT/inf en DataFrames y diccionarios.
+    JSON/Supabase no acepta esos valores, por lo que se normalizan a None.
+    """
+    try:
+        if value is None:
+            return None
+        if value is pd.NA or value is pd.NaT:
+            return None
+        if isinstance(value, float):
+            if pd.isna(value) or value in (float("inf"), float("-inf")):
+                return None
+            return value
+        if isinstance(value, (int, bool, str)):
+            return value
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {str(k): make_json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [make_json_safe(v) for v in value]
+        if pd.isna(value):
+            return None
+        return value
+    except Exception:
+        return str(value) if value is not None else None
+
+
+def dataframe_records_json_safe(df: pd.DataFrame) -> list[dict]:
+    """Devuelve registros de un DataFrame limpiando NaN/NaT/inf para JSON."""
+    if df is None or df.empty:
+        return []
+    cleaned = df.replace([float("inf"), float("-inf")], pd.NA)
+    return make_json_safe(cleaned.to_dict(orient="records"))
+
 
 CONSULTA_EXCEL_SHEETS = [
     "Dashboard",
@@ -2789,8 +2828,11 @@ def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) 
 
     try:
         client.table("dcd_publicaciones").update({"publicacion_vigente": False}).eq("publicacion_vigente", True).execute()
-        centros_incluidos = [b.get("unidad_docente", "") for b in package["borradores"]]
-        client.table("dcd_publicaciones").insert({
+        centros_incluidos = make_json_safe([b.get("unidad_docente", "") for b in package["borradores"]])
+        centros_pendientes = make_json_safe(missing)
+        estado_centros = dataframe_records_json_safe(package.get("status_df", pd.DataFrame()))
+
+        payload_publicacion = make_json_safe({
             "codigo_publicacion": codigo_publicacion,
             "version_publicacion": version,
             "fecha_publicacion": datetime.now().isoformat(),
@@ -2802,10 +2844,11 @@ def create_publication(tipo_publicacion: str, motivo: str, allow_missing: bool) 
             "ruta_excel": excel_path,
             "ruta_pdf": pdf_path,
             "centros_incluidos": centros_incluidos,
-            "centros_pendientes": missing,
-            "centros_con_borrador_no_finalizado": package["status_df"].to_dict(orient="records"),
-            "observaciones": "Publicación vigente generada desde DCD 1.0.8.2.",
-        }).execute()
+            "centros_pendientes": centros_pendientes,
+            "centros_con_borrador_no_finalizado": estado_centros,
+            "observaciones": "Publicación vigente generada desde DCD 1.2.1 beta 3.",
+        })
+        client.table("dcd_publicaciones").insert(payload_publicacion).execute()
         audit_event("publicacion_generada", f"{codigo_publicacion}. Pendientes: {len(missing)}")
     except Exception as exc:
         return False, f"Los archivos se subieron, pero falló el registro de publicación: {exc}"

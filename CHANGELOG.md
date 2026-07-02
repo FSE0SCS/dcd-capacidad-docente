@@ -93,3 +93,10 @@
 - Añadida primera configuración administrativa de centros multiusuario.
 - Nueva pestaña admin `Multiusuario` para marcar centros, definir usuarios previstos y asignar usuarios existentes.
 - Preparación de trazabilidad para futura consolidación por centro.
+
+
+## DCD 1.2.1 beta 3
+
+- Corrección del registro de publicaciones en Supabase cuando existen valores NaN/NaT procedentes de tablas Pandas.
+- No requiere cambios SQL.
+- No modifica lógica de cálculo, Excel ni PDF.
