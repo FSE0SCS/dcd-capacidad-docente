@@ -102,3 +102,7 @@ Versión beta para validar la configuración administrativa de centros multiusua
 - Edición y recuperación de detalle por alumno en registros existentes.
 - Nueva hoja `Detalle_Alumnos` en Excel admin y Excel de consulta.
 - No se modifica el Dashboard ni se incorpora al PDF principal en esta beta.
+
+## DCD 1.2.2 RC1
+
+Versión candidata para revisión final de la fase de servicios y curso/año por alumno. No introduce cambios funcionales respecto a la beta validada; solo consolida versión, documentación e historial.

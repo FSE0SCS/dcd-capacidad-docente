@@ -461,3 +461,7 @@ Se inicia la fase multiusuario por centro docente. La primera beta añade una pe
 - Edición y recuperación de detalle por alumno en registros existentes.
 - Nueva hoja `Detalle_Alumnos` en Excel admin y Excel de consulta.
 - No se modifica el Dashboard ni se incorpora al PDF principal en esta beta.
+
+## DCD 1.2.2 RC1
+
+Versión candidata con servicio y curso/año por alumno, consolidando las funcionalidades validadas en beta 2.

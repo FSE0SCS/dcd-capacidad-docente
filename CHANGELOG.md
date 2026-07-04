@@ -122,3 +122,10 @@
 - Edición y recuperación de detalle por alumno en registros existentes.
 - Nueva hoja `Detalle_Alumnos` en Excel admin y Excel de consulta.
 - No se modifica el Dashboard ni se incorpora al PDF principal en esta beta.
+
+## DCD 1.2.2 RC1
+
+- Consolidada la captura opcional de Servicio y Curso/año por alumno.
+- Validado guardado, recuperación, edición y visualización de Detalle_Alumnos.
+- Validada salida en Excel admin y Excel consulta.
+- Sin cambios en Dashboard ni PDF principal.

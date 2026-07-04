@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.2 beta 2
+# Versión: DCD 1.2.2 RC1
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.2 beta 2"
+APP_VERSION = "DCD 1.2.2 RC1"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -5455,7 +5455,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.1 beta 3", "Corrección de valores NaN al registrar publicaciones multiusuario en Supabase."),
         ("DCD 1.2.1 beta 4", "Consolidación parcial manual por admin para centros multiusuario incompletos."),
         ("DCD 1.2.2 beta 1", "Servicios y curso/año voluntarios por alumno, con exportación a Excel en hoja Detalle_Alumnos."),
-        ("DCD 1.2.2 beta 2", "Ajuste de visualización de Detalle alumnos en la tabla de registros introducidos."),
+        ("DCD 1.2.2 RC1", "Ajuste de visualización de Detalle alumnos en la tabla de registros introducidos."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
