@@ -106,3 +106,7 @@ Versión beta para validar la configuración administrativa de centros multiusua
 ## DCD 1.2.2 RC1
 
 Versión candidata para revisión final de la fase de servicios y curso/año por alumno. No introduce cambios funcionales respecto a la beta validada; solo consolida versión, documentación e historial.
+
+## DCD 1.2.2 RC2
+
+Versión candidata con mejoras finales sobre la RC1: turnos deslizantes por alumno, Máster/Otro en universitario y titulaciones libres reutilizables. No requiere SQL nuevo.

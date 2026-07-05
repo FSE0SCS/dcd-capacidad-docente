@@ -129,3 +129,12 @@
 - Validado guardado, recuperación, edición y visualización de Detalle_Alumnos.
 - Validada salida en Excel admin y Excel consulta.
 - Sin cambios en Dashboard ni PDF principal.
+
+## DCD 1.2.2 RC2
+
+- Añadido patrón semanal individual por cada alumno en turno deslizante.
+- Añadido Nivel de Estudio II: Máster para Universitario.
+- Añadido Nivel de Estudio II: Otro para Universitario.
+- Permitida Titulación de escritura libre para Universitario + Máster/Otro.
+- Reutilización de titulaciones libres ya guardadas como sugerencias.
+- Ampliada hoja Detalle_Alumnos con columnas de patrón deslizante individual.

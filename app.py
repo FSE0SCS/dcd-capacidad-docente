@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.2 RC1
+# Versión: DCD 1.2.2 RC2
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.2 RC1"
+APP_VERSION = "DCD 1.2.2 RC2"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -326,6 +326,7 @@ def init_session_state() -> None:
         "sel_nivel_ii": "",
         "sel_rama": "",
         "sel_titulacion": "",
+        "sel_titulacion_libre_catalogo": "",
         "numero_alumnos": 0,
         "alumnos_manana": 0,
         "alumnos_tarde": 0,
@@ -357,10 +358,12 @@ def init_session_state() -> None:
 def normalizar_detalle_alumnos(value, total: int | None = None) -> list[dict]:
     """Normaliza el detalle opcional por alumno.
 
-    Formato interno/JSON:
-    [{"alumno": 1, "servicio": "...", "curso": "..."}, ...]
-    Solo se conservan filas con servicio o curso informado, salvo que se solicite
-    expansión a un total para pintar el formulario.
+    Formato interno/JSON ampliado desde DCD 1.2.2 RC2:
+    [{"alumno": 1, "servicio": "...", "curso": "...", "es_deslizante": true,
+      "deslizante_lunes": "M", ...}, ...]
+
+    Solo se conservan filas con servicio, curso o patrón deslizante informado,
+    salvo que se solicite expansión a un total para pintar el formulario.
     """
     data = []
     if value is None or value == "":
@@ -385,20 +388,136 @@ def normalizar_detalle_alumnos(value, total: int | None = None) -> list[dict]:
             alumno = idx
         servicio = str(entry.get("servicio") or entry.get("Servicio") or "").strip()
         curso = str(entry.get("curso") or entry.get("Curso") or entry.get("Curso/año") or "").strip()
-        if servicio or curso or total is not None:
-            por_alumno[alumno] = {"alumno": alumno, "servicio": servicio, "curso": curso}
+        des_lunes = normalizar_turno_dia(entry.get("deslizante_lunes") or entry.get("Deslizante lunes") or "")
+        des_martes = normalizar_turno_dia(entry.get("deslizante_martes") or entry.get("Deslizante martes") or "")
+        des_miercoles = normalizar_turno_dia(entry.get("deslizante_miercoles") or entry.get("deslizante_miércoles") or entry.get("Deslizante miércoles") or "")
+        des_jueves = normalizar_turno_dia(entry.get("deslizante_jueves") or entry.get("Deslizante jueves") or "")
+        des_viernes = normalizar_turno_dia(entry.get("deslizante_viernes") or entry.get("Deslizante viernes") or "")
+        es_deslizante = bool(entry.get("es_deslizante") or entry.get("Es deslizante") or any([des_lunes, des_martes, des_miercoles, des_jueves, des_viernes]))
+        row = {
+            "alumno": alumno,
+            "servicio": servicio,
+            "curso": curso,
+            "es_deslizante": es_deslizante,
+            "deslizante_lunes": des_lunes,
+            "deslizante_martes": des_martes,
+            "deslizante_miercoles": des_miercoles,
+            "deslizante_jueves": des_jueves,
+            "deslizante_viernes": des_viernes,
+        }
+        if servicio or curso or es_deslizante or total is not None:
+            por_alumno[alumno] = row
 
     if total is not None:
         total = max(safe_int(total, 0), 0)
-        return [por_alumno.get(i, {"alumno": i, "servicio": "", "curso": ""}) for i in range(1, total + 1)]
+        return [por_alumno.get(i, {
+            "alumno": i,
+            "servicio": "",
+            "curso": "",
+            "es_deslizante": False,
+            "deslizante_lunes": "",
+            "deslizante_martes": "",
+            "deslizante_miercoles": "",
+            "deslizante_jueves": "",
+            "deslizante_viernes": "",
+        }) for i in range(1, total + 1)]
 
-    return [por_alumno[k] for k in sorted(por_alumno) if por_alumno[k].get("servicio") or por_alumno[k].get("curso")]
+    return [
+        por_alumno[k]
+        for k in sorted(por_alumno)
+        if por_alumno[k].get("servicio") or por_alumno[k].get("curso") or por_alumno[k].get("es_deslizante")
+    ]
+
+
+def normalizar_turno_dia(value) -> str:
+    value = str(value or "").strip().upper()
+    return value if value in {"M", "T", "R"} else ""
+
+
+def patron_deslizante_entry(entry: dict) -> dict:
+    """Devuelve el patrón semanal normalizado de una entrada de detalle_alumnos."""
+    return {
+        "deslizante_lunes": normalizar_turno_dia(entry.get("deslizante_lunes", "")),
+        "deslizante_martes": normalizar_turno_dia(entry.get("deslizante_martes", "")),
+        "deslizante_miercoles": normalizar_turno_dia(entry.get("deslizante_miercoles", "")),
+        "deslizante_jueves": normalizar_turno_dia(entry.get("deslizante_jueves", "")),
+        "deslizante_viernes": normalizar_turno_dia(entry.get("deslizante_viernes", "")),
+    }
+
+
+def entry_tiene_patron_deslizante_completo(entry: dict) -> bool:
+    patron = patron_deslizante_entry(entry)
+    return all(patron.values())
+
+
+def formatear_patron_deslizante_entry(entry: dict) -> str:
+    patron = patron_deslizante_entry(entry)
+    if not any(patron.values()):
+        return ""
+    return " / ".join([
+        f"L:{patron['deslizante_lunes']}",
+        f"M:{patron['deslizante_martes']}",
+        f"X:{patron['deslizante_miercoles']}",
+        f"J:{patron['deslizante_jueves']}",
+        f"V:{patron['deslizante_viernes']}",
+    ])
+
+
+def deslizantes_desde_detalle(detalle: list[dict], n_deslizantes: int = 0) -> list[dict]:
+    """Obtiene, por orden, las entradas marcadas como deslizantes."""
+    detalle = normalizar_detalle_alumnos(detalle)
+    rows = [entry for entry in detalle if bool(entry.get("es_deslizante"))]
+    if n_deslizantes > 0:
+        rows = rows[:n_deslizantes]
+    return rows
+
+
+def formatear_patrones_deslizantes_detalle(detalle: list[dict], n_deslizantes: int = 0) -> str:
+    partes = []
+    for idx, entry in enumerate(deslizantes_desde_detalle(detalle, n_deslizantes), start=1):
+        patron = formatear_patron_deslizante_entry(entry)
+        if patron:
+            partes.append(f"Alumno deslizante {idx}: {patron}")
+    return "; ".join(partes)
+
+
+def detalle_con_fallback_deslizante(detalle: list[dict], n_deslizantes: int, item: dict | None = None) -> list[dict]:
+    """Garantiza patrones deslizantes para registros antiguos con un único patrón global."""
+    n_deslizantes = max(safe_int(n_deslizantes, 0), 0)
+    detalle_norm = normalizar_detalle_alumnos(detalle)
+    if n_deslizantes <= 0:
+        return detalle_norm
+    actuales = deslizantes_desde_detalle(detalle_norm, n_deslizantes)
+    if len(actuales) >= n_deslizantes and all(entry_tiene_patron_deslizante_completo(e) for e in actuales):
+        return detalle_norm
+
+    item = item or {}
+    fallback = {
+        "deslizante_lunes": normalizar_turno_dia(item.get("Deslizante lunes", "")),
+        "deslizante_martes": normalizar_turno_dia(item.get("Deslizante martes", "")),
+        "deslizante_miercoles": normalizar_turno_dia(item.get("Deslizante miércoles", "")),
+        "deslizante_jueves": normalizar_turno_dia(item.get("Deslizante jueves", "")),
+        "deslizante_viernes": normalizar_turno_dia(item.get("Deslizante viernes", "")),
+    }
+    if not all(fallback.values()):
+        return detalle_norm
+
+    por_alumno = {safe_int(e.get("alumno", 0)): dict(e) for e in detalle_norm if safe_int(e.get("alumno", 0)) > 0}
+    for alumno in range(1, n_deslizantes + 1):
+        row = por_alumno.get(alumno, {"alumno": alumno, "servicio": "", "curso": ""})
+        row.update({"es_deslizante": True, **fallback})
+        por_alumno[alumno] = row
+    return [por_alumno[k] for k in sorted(por_alumno)]
 
 
 def limpiar_detalle_alumnos_widgets() -> None:
     """Limpia los campos dinámicos de detalle por alumno del formulario."""
     for key in list(st.session_state.keys()):
-        if key.startswith("detalle_alumno_servicio_") or key.startswith("detalle_alumno_curso_"):
+        if (
+            key.startswith("detalle_alumno_servicio_")
+            or key.startswith("detalle_alumno_curso_")
+            or key.startswith("detalle_alumno_deslizante_")
+        ):
             del st.session_state[key]
     st.session_state.detalle_alumnos = []
 
@@ -419,16 +538,75 @@ def preparar_detalle_alumnos_widgets(total: int, detalle: list[dict] | None = No
             st.session_state[curso_key] = str(entry.get("curso", "") or "")
 
 
+def preparar_deslizantes_alumno_widgets(n_deslizantes: int, detalle: list[dict] | None = None, item_fallback: dict | None = None) -> None:
+    """Inicializa los patrones semanales por cada alumno en turno deslizante."""
+    n_deslizantes = max(safe_int(n_deslizantes, 0), 0)
+    detalle_norm = detalle_con_fallback_deslizante(
+        detalle if detalle is not None else st.session_state.get("detalle_alumnos", []),
+        n_deslizantes,
+        item_fallback,
+    )
+    deslizantes = deslizantes_desde_detalle(detalle_norm, n_deslizantes)
+    por_orden = {idx: entry for idx, entry in enumerate(deslizantes, start=1)}
+    for idx in range(1, n_deslizantes + 1):
+        entry = por_orden.get(idx, {})
+        for dia in ["lunes", "martes", "miercoles", "jueves", "viernes"]:
+            key = f"detalle_alumno_deslizante_{idx}_{dia}"
+            if key not in st.session_state:
+                st.session_state[key] = normalizar_turno_dia(entry.get(f"deslizante_{dia}", ""))
+
+
 def recoger_detalle_alumnos_desde_widgets(total: int) -> list[dict]:
-    """Recoge solo las filas voluntarias cumplimentadas de Servicio/Curso por alumno."""
+    """Recoge Servicio/Curso y el patrón deslizante individual de cada alumno deslizante."""
     total = max(safe_int(total, 0), 0)
+    n_deslizantes = max(safe_int(st.session_state.get("alumnos_deslizante", 0), 0), 0)
     rows = []
     for alumno in range(1, total + 1):
         servicio = str(st.session_state.get(f"detalle_alumno_servicio_{alumno}", "") or "").strip()
         curso = str(st.session_state.get(f"detalle_alumno_curso_{alumno}", "") or "").strip()
-        if servicio or curso:
-            rows.append({"alumno": alumno, "servicio": servicio, "curso": curso})
-    return rows
+        row = {"alumno": alumno, "servicio": servicio, "curso": curso}
+        if alumno <= n_deslizantes:
+            patron = {
+                "deslizante_lunes": normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{alumno}_lunes", "")),
+                "deslizante_martes": normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{alumno}_martes", "")),
+                "deslizante_miercoles": normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{alumno}_miercoles", "")),
+                "deslizante_jueves": normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{alumno}_jueves", "")),
+                "deslizante_viernes": normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{alumno}_viernes", "")),
+            }
+            if any(patron.values()):
+                row.update({"es_deslizante": True, **patron})
+        if row.get("servicio") or row.get("curso") or row.get("es_deslizante"):
+            rows.append(row)
+    return normalizar_detalle_alumnos(rows)
+
+
+def patrones_deslizantes_widgets_completos(n_deslizantes: int) -> bool:
+    n_deslizantes = max(safe_int(n_deslizantes, 0), 0)
+    for idx in range(1, n_deslizantes + 1):
+        valores = [
+            normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{idx}_lunes", "")),
+            normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{idx}_martes", "")),
+            normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{idx}_miercoles", "")),
+            normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{idx}_jueves", "")),
+            normalizar_turno_dia(st.session_state.get(f"detalle_alumno_deslizante_{idx}_viernes", "")),
+        ]
+        if not all(valores):
+            return False
+    return True
+
+
+def primer_patron_deslizante_para_campos_globales(detalle: list[dict]) -> dict:
+    deslizantes = deslizantes_desde_detalle(detalle, 1)
+    if not deslizantes:
+        return {"lunes": "", "martes": "", "miercoles": "", "jueves": "", "viernes": ""}
+    entry = deslizantes[0]
+    return {
+        "lunes": normalizar_turno_dia(entry.get("deslizante_lunes", "")),
+        "martes": normalizar_turno_dia(entry.get("deslizante_martes", "")),
+        "miercoles": normalizar_turno_dia(entry.get("deslizante_miercoles", "")),
+        "jueves": normalizar_turno_dia(entry.get("deslizante_jueves", "")),
+        "viernes": normalizar_turno_dia(entry.get("deslizante_viernes", "")),
+    }
 
 
 
@@ -445,15 +623,18 @@ def formatear_detalle_alumnos_display(value) -> str:
         alumno = safe_int(entry.get("alumno", 0), 0)
         servicio = str(entry.get("servicio", "") or "").strip()
         curso = str(entry.get("curso", "") or "").strip()
-        if not servicio and not curso:
+        patron = formatear_patron_deslizante_entry(entry) if entry.get("es_deslizante") else ""
+        if not servicio and not curso and not patron:
             continue
         etiqueta = f"Alumno {alumno}" if alumno else "Alumno"
-        if servicio and curso:
-            partes.append(f"{etiqueta}: {servicio} / {curso}")
-        elif servicio:
-            partes.append(f"{etiqueta}: {servicio}")
-        else:
-            partes.append(f"{etiqueta}: {curso}")
+        valores = []
+        if servicio:
+            valores.append(servicio)
+        if curso:
+            valores.append(curso)
+        if patron:
+            valores.append(f"Deslizante {patron}")
+        partes.append(f"{etiqueta}: " + " / ".join(valores))
     return "; ".join(partes)
 
 
@@ -518,9 +699,15 @@ def cargar_registro_en_formulario(item: dict) -> None:
     st.session_state.deslizante_viernes = str(item.get("Deslizante viernes", "") or "")
     st.session_state.observaciones_titulacion = str(item.get(OBS_TITULACION_DISPLAY, "") or "")
     limpiar_detalle_alumnos_widgets()
-    detalle = normalizar_detalle_alumnos(item.get(DETALLE_ALUMNOS_DISPLAY, []), total=safe_int(item.get("Nº alumnos", 0)))
-    st.session_state.detalle_alumnos = normalizar_detalle_alumnos(detalle)
-    preparar_detalle_alumnos_widgets(safe_int(item.get("Nº alumnos", 0)), detalle)
+    detalle = detalle_con_fallback_deslizante(
+        item.get(DETALLE_ALUMNOS_DISPLAY, []),
+        safe_int(item.get("Alumnos deslizante", 0)),
+        item,
+    )
+    detalle_total = normalizar_detalle_alumnos(detalle, total=safe_int(item.get("Nº alumnos", 0)))
+    st.session_state.detalle_alumnos = normalizar_detalle_alumnos(detalle_total)
+    preparar_detalle_alumnos_widgets(safe_int(item.get("Nº alumnos", 0)), detalle_total)
+    preparar_deslizantes_alumno_widgets(safe_int(item.get("Alumnos deslizante", 0)), detalle_total, item)
 
 
 def aplicar_edicion_pendiente_en_formulario() -> None:
@@ -560,8 +747,10 @@ def reset_downstream(level: str) -> None:
     elif level == "nivel_ii":
         st.session_state.sel_rama = ""
         st.session_state.sel_titulacion = ""
+        st.session_state.sel_titulacion_libre_catalogo = ""
     elif level == "rama":
         st.session_state.sel_titulacion = ""
+        st.session_state.sel_titulacion_libre_catalogo = ""
 
 
 def safe_code(text: str) -> str:
@@ -600,6 +789,20 @@ def registro_key(nivel_i: str, nivel_ii: str, rama: str, titulacion: str) -> str
     return "||".join([nivel_i, nivel_ii, rama, titulacion])
 
 
+def normalizar_texto_opcion(value: str) -> str:
+    return str(value or "").strip().upper().replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U")
+
+
+def es_modo_titulacion_libre(nivel_i: str, nivel_ii: str) -> bool:
+    return normalizar_texto_opcion(nivel_i) == "UNIVERSITARIO" and normalizar_texto_opcion(nivel_ii) in {"MASTER", "OTRO", "OTRO (DEFINIR)"}
+
+
+def aplicar_titulacion_libre_catalogo() -> None:
+    seleccion = str(st.session_state.get("sel_titulacion_libre_catalogo", "") or "").strip()
+    if seleccion:
+        st.session_state.sel_titulacion = seleccion
+
+
 def safe_int(value, default: int = 0) -> int:
     try:
         if pd.isna(value):
@@ -614,7 +817,12 @@ def suma_turnos_registro(item: dict) -> int:
 
 
 def registro_deslizante_completo(item: dict) -> bool:
-    if safe_int(item.get("Alumnos deslizante", 0)) <= 0:
+    n_deslizantes = safe_int(item.get("Alumnos deslizante", 0))
+    if n_deslizantes <= 0:
+        return True
+    detalle = detalle_con_fallback_deslizante(item.get(DETALLE_ALUMNOS_DISPLAY, []), n_deslizantes, item)
+    deslizantes = deslizantes_desde_detalle(detalle, n_deslizantes)
+    if len(deslizantes) >= n_deslizantes and all(entry_tiene_patron_deslizante_completo(e) for e in deslizantes[:n_deslizantes]):
         return True
     return all(str(item.get(col, "") or "").strip() in {"M", "T", "R"} for col in DESLIZANTE_DISPLAY)
 
@@ -658,7 +866,7 @@ def registro_to_db_extra_fields(item: dict) -> dict:
 def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Construye hojas/tablas de turnos y observaciones para Excel/PDF de consulta."""
     base_cols = ["Código borrador", "Fecha guardado", "Área", "Centro docente", "Columna Excel", *KEY_COLUMNS, "Nº alumnos"]
-    detalle_cols = base_cols + TURNOS_ALUMNOS_DISPLAY + DESLIZANTE_DISPLAY + [OBS_TITULACION_DISPLAY]
+    detalle_cols = base_cols + TURNOS_ALUMNOS_DISPLAY + DESLIZANTE_DISPLAY + [OBS_TITULACION_DISPLAY, DETALLE_ALUMNOS_DISPLAY]
     detalle_pdf_cols = ["Centro docente", "Nivel I", "Nivel II", "Rama", "Titulación", "Nº", "Mañana", "Tarde", "Rot.", "Desl.", "Patrón deslizante"]
     obs_pdf_cols = ["Centro docente", "Nivel I", "Nivel II", "Rama", "Titulación", "Nº", "Observaciones"]
     if registros_df is None or registros_df.empty:
@@ -716,6 +924,10 @@ def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     detalle_pdf = detalle.copy()
     if not detalle_pdf.empty:
         def _patron_deslizante(row) -> str:
+            n_deslizantes = safe_int(row.get("Alumnos deslizante", 0))
+            detalle_txt = formatear_patrones_deslizantes_detalle(row.get(DETALLE_ALUMNOS_DISPLAY, []), n_deslizantes)
+            if detalle_txt:
+                return detalle_txt
             valores = [str(row.get(col, "") or "").strip() for col in DESLIZANTE_DISPLAY]
             if not any(valores):
                 return ""
@@ -743,7 +955,7 @@ def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
         })
 
     return {
-        "Turnos_Detalle": detalle,
+        "Turnos_Detalle": detalle.drop(columns=[DETALLE_ALUMNOS_DISPLAY], errors="ignore"),
         "Turnos_Detalle_PDF": detalle_pdf.reset_index(drop=True),
         "Turnos_Resumen": resumen_turnos,
         "Turnos_Resumen_Centro": resumen_centro,
@@ -756,13 +968,16 @@ def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 def build_detalle_alumnos_table(registros_df: pd.DataFrame) -> pd.DataFrame:
     """Construye la hoja Detalle_Alumnos para Excel admin/consulta.
 
-    No se incorpora al dashboard ni al cuerpo principal del PDF para evitar saturación.
-    Solo lista los alumnos para los que el centro haya informado Servicio y/o Curso/año.
+    Desde DCD 1.2.2 RC2 incluye, además de Servicio y Curso/año,
+    el patrón semanal individual de cada alumno en turno deslizante.
     """
     cols = [
         "Código borrador", "Fecha guardado", "Área", "Centro docente", "Usuario aportación",
         "Nivel Estudio I", "Nivel Estudio II", "Rama", "Titulación",
-        "Alumno", "Servicio", "Curso/año", "Nº alumnos titulación",
+        "Alumno", "Servicio", "Curso/año", "Es deslizante",
+        "Deslizante lunes", "Deslizante martes", "Deslizante miércoles", "Deslizante jueves", "Deslizante viernes",
+        "Patrón deslizante",
+        "Nº alumnos titulación",
         "Alumnos mañana", "Alumnos tarde", "Alumnos rotatorio", "Alumnos deslizante",
         OBS_TITULACION_DISPLAY,
     ]
@@ -771,13 +986,18 @@ def build_detalle_alumnos_table(registros_df: pd.DataFrame) -> pd.DataFrame:
 
     rows = []
     for _, row in registros_df.iterrows():
-        detalle = normalizar_detalle_alumnos(row.get(DETALLE_ALUMNOS_DISPLAY, []))
+        item_dict = row.to_dict()
+        n_deslizantes = safe_int(row.get("Alumnos deslizante", 0))
+        detalle = detalle_con_fallback_deslizante(row.get(DETALLE_ALUMNOS_DISPLAY, []), n_deslizantes, item_dict)
         if not detalle:
             continue
         for entry in detalle:
             servicio = str(entry.get("servicio", "") or "").strip()
             curso = str(entry.get("curso", "") or "").strip()
-            if not servicio and not curso:
+            es_deslizante = bool(entry.get("es_deslizante"))
+            patron = patron_deslizante_entry(entry)
+            patron_txt = formatear_patron_deslizante_entry(entry)
+            if not servicio and not curso and not es_deslizante:
                 continue
             rows.append({
                 "Código borrador": row.get("Código borrador", ""),
@@ -792,11 +1012,18 @@ def build_detalle_alumnos_table(registros_df: pd.DataFrame) -> pd.DataFrame:
                 "Alumno": safe_int(entry.get("alumno", 0)),
                 "Servicio": servicio,
                 "Curso/año": curso,
+                "Es deslizante": "Sí" if es_deslizante else "No",
+                "Deslizante lunes": patron["deslizante_lunes"],
+                "Deslizante martes": patron["deslizante_martes"],
+                "Deslizante miércoles": patron["deslizante_miercoles"],
+                "Deslizante jueves": patron["deslizante_jueves"],
+                "Deslizante viernes": patron["deslizante_viernes"],
+                "Patrón deslizante": patron_txt,
                 "Nº alumnos titulación": safe_int(row.get("Nº alumnos", 0)),
                 "Alumnos mañana": safe_int(row.get("Alumnos mañana", 0)),
                 "Alumnos tarde": safe_int(row.get("Alumnos tarde", 0)),
                 "Alumnos rotatorio": safe_int(row.get("Alumnos rotatorio", 0)),
-                "Alumnos deslizante": safe_int(row.get("Alumnos deslizante", 0)),
+                "Alumnos deslizante": n_deslizantes,
                 OBS_TITULACION_DISPLAY: row.get(OBS_TITULACION_DISPLAY, ""),
             })
     if not rows:
@@ -824,12 +1051,66 @@ def load_catalogo() -> pd.DataFrame:
         df[col] = df[col].astype(str).str.strip()
 
     df = df[df["Titulación"].notna() & (df["Titulación"].astype(str).str.strip() != "")]
+
+    # DCD 1.2.2 RC2: opciones universitarias adicionales con titulación libre.
+    # Se añaden al catálogo en memoria para que aparezcan en los selectores sin modificar el Excel base.
+    extra_rows = []
+    for nivel_ii_extra in ["Máster", "Otro"]:
+        for rama_extra in ["Sanidad", "Otro (Definir)"]:
+            extra_rows.append({
+                "Nivel Estudio I": "Universitario",
+                "Nivel Estudio II": nivel_ii_extra,
+                "Rama": rama_extra,
+                "Titulación": "Titulación libre",
+            })
+    if extra_rows:
+        df = pd.concat([df, pd.DataFrame(extra_rows)], ignore_index=True)
+
     df = df.drop_duplicates(subset=KEY_COLUMNS).reset_index(drop=True)
     return df
 
 
 def sorted_unique(series: pd.Series) -> list[str]:
     values = [str(x).strip() for x in series.dropna().unique() if str(x).strip()]
+    return sorted(values, key=lambda x: x.upper())
+
+
+def obtener_titulaciones_libres_usadas(nivel_i: str, nivel_ii: str, rama: str) -> list[str]:
+    """Recupera titulaciones libres ya usadas para reutilizarlas como sugerencia.
+
+    No requiere tabla nueva: consulta los registros ya guardados y añade los valores
+    del expediente en edición.
+    """
+    values = set()
+    for item in st.session_state.get("registros", {}).values():
+        if (
+            str(item.get("Nivel Estudio I", "")).strip() == str(nivel_i).strip()
+            and str(item.get("Nivel Estudio II", "")).strip() == str(nivel_ii).strip()
+            and str(item.get("Rama", "")).strip() == str(rama).strip()
+        ):
+            val = str(item.get("Titulación", "") or "").strip()
+            if val and val != "Titulación libre":
+                values.add(val)
+
+    client = get_supabase_client()
+    if client is not None and nivel_i and nivel_ii and rama:
+        try:
+            resp = (
+                client.table("dcd_registros")
+                .select("titulacion")
+                .eq("nivel_i", nivel_i)
+                .eq("nivel_ii", nivel_ii)
+                .eq("rama", rama)
+                .limit(1000)
+                .execute()
+            )
+            for row in getattr(resp, "data", []) or []:
+                val = str(row.get("titulacion", "") or "").strip()
+                if val and val != "Titulación libre":
+                    values.add(val)
+        except Exception:
+            pass
+
     return sorted(values, key=lambda x: x.upper())
 
 
@@ -3933,15 +4214,38 @@ def page_entrada_datos() -> None:
     )
 
     df4 = df3[df3["Rama"] == st.session_state.sel_rama] if st.session_state.sel_rama else df3.iloc[0:0]
-    titulacion_options = sorted_unique(df4["Titulación"]) if not df4.empty else []
-    if st.session_state.sel_titulacion not in titulacion_options:
-        st.session_state.sel_titulacion = ""
-    st.selectbox(
-        "Titulación",
-        options=[""] + titulacion_options,
-        key="sel_titulacion",
-        disabled=edicion_bloqueada or not bool(st.session_state.sel_rama),
-    )
+    titulacion_libre = es_modo_titulacion_libre(st.session_state.sel_nivel_i, st.session_state.sel_nivel_ii)
+    if titulacion_libre:
+        st.caption("Para Universitario + Máster/Otro la titulación se introduce como texto libre. Las ya usadas aparecerán como sugerencias.")
+        titulaciones_usadas = obtener_titulaciones_libres_usadas(
+            st.session_state.sel_nivel_i,
+            st.session_state.sel_nivel_ii,
+            st.session_state.sel_rama,
+        ) if st.session_state.sel_rama else []
+        st.selectbox(
+            "Titulaciones libres ya utilizadas",
+            options=[""] + titulaciones_usadas,
+            key="sel_titulacion_libre_catalogo",
+            on_change=aplicar_titulacion_libre_catalogo,
+            disabled=edicion_bloqueada or not bool(st.session_state.sel_rama) or not bool(titulaciones_usadas),
+            help="Opcional. Si selecciona una titulación ya usada, se copiará al campo de texto.",
+        )
+        st.text_input(
+            "Titulación",
+            key="sel_titulacion",
+            disabled=edicion_bloqueada or not bool(st.session_state.sel_rama),
+            placeholder="Escriba el nombre del máster o de la titulación",
+        )
+    else:
+        titulacion_options = sorted_unique(df4["Titulación"]) if not df4.empty else []
+        if st.session_state.sel_titulacion not in titulacion_options:
+            st.session_state.sel_titulacion = ""
+        st.selectbox(
+            "Titulación",
+            options=[""] + titulacion_options,
+            key="sel_titulacion",
+            disabled=edicion_bloqueada or not bool(st.session_state.sel_rama),
+        )
 
     st.number_input(
         "Número de alumnos",
@@ -3976,20 +4280,24 @@ def page_entrada_datos() -> None:
         else:
             st.warning(f"La suma de turnos ({suma_turnos_form}) debe coincidir con el número total de alumnos ({total_form}).")
 
-    if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0:
+    n_deslizantes_form = int(st.session_state.get("alumnos_deslizante", 0) or 0)
+    if n_deslizantes_form > 0:
         st.markdown("#### Patrón semanal del turno deslizante")
-        st.caption("Para el turno deslizante, indique el patrón de lunes a viernes: M = mañana, T = tarde, R = rotatorio.")
-        d1, d2, d3, d4, d5 = st.columns(5)
-        with d1:
-            st.selectbox("Lunes", options=TURNO_DIA_OPTIONS, key="deslizante_lunes", disabled=edicion_bloqueada)
-        with d2:
-            st.selectbox("Martes", options=TURNO_DIA_OPTIONS, key="deslizante_martes", disabled=edicion_bloqueada)
-        with d3:
-            st.selectbox("Miércoles", options=TURNO_DIA_OPTIONS, key="deslizante_miercoles", disabled=edicion_bloqueada)
-        with d4:
-            st.selectbox("Jueves", options=TURNO_DIA_OPTIONS, key="deslizante_jueves", disabled=edicion_bloqueada)
-        with d5:
-            st.selectbox("Viernes", options=TURNO_DIA_OPTIONS, key="deslizante_viernes", disabled=edicion_bloqueada)
+        st.caption("Indique un patrón por cada alumno en turno deslizante: M = mañana, T = tarde, R = rotatorio.")
+        preparar_deslizantes_alumno_widgets(n_deslizantes_form, st.session_state.get("detalle_alumnos", []))
+        for desl_idx in range(1, n_deslizantes_form + 1):
+            st.write(f"Alumno deslizante {desl_idx}")
+            d1, d2, d3, d4, d5 = st.columns(5)
+            with d1:
+                st.selectbox("Lunes", options=TURNO_DIA_OPTIONS, key=f"detalle_alumno_deslizante_{desl_idx}_lunes", disabled=edicion_bloqueada)
+            with d2:
+                st.selectbox("Martes", options=TURNO_DIA_OPTIONS, key=f"detalle_alumno_deslizante_{desl_idx}_martes", disabled=edicion_bloqueada)
+            with d3:
+                st.selectbox("Miércoles", options=TURNO_DIA_OPTIONS, key=f"detalle_alumno_deslizante_{desl_idx}_miercoles", disabled=edicion_bloqueada)
+            with d4:
+                st.selectbox("Jueves", options=TURNO_DIA_OPTIONS, key=f"detalle_alumno_deslizante_{desl_idx}_jueves", disabled=edicion_bloqueada)
+            with d5:
+                st.selectbox("Viernes", options=TURNO_DIA_OPTIONS, key=f"detalle_alumno_deslizante_{desl_idx}_viernes", disabled=edicion_bloqueada)
     else:
         st.session_state.deslizante_lunes = ""
         st.session_state.deslizante_martes = ""
@@ -4049,14 +4357,8 @@ def page_entrada_datos() -> None:
                 st.warning("Debe completar Nivel I, Nivel II, Rama y Titulación.")
             elif suma_turnos_form != total_form:
                 st.error("No se puede añadir el registro: la suma de alumnos por turnos debe coincidir con el número total de alumnos.")
-            elif int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 and not all([
-                st.session_state.get("deslizante_lunes"),
-                st.session_state.get("deslizante_martes"),
-                st.session_state.get("deslizante_miercoles"),
-                st.session_state.get("deslizante_jueves"),
-                st.session_state.get("deslizante_viernes"),
-            ]):
-                st.error("Si hay alumnos en turno deslizante, debe indicar el patrón de lunes a viernes.")
+            elif int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 and not patrones_deslizantes_widgets_completos(int(st.session_state.get("alumnos_deslizante", 0) or 0)):
+                st.error("Si hay alumnos en turno deslizante, debe indicar el patrón completo de lunes a viernes para cada alumno deslizante.")
             else:
                 key = registro_key(
                     st.session_state.sel_nivel_i,
@@ -4067,6 +4369,8 @@ def page_entrada_datos() -> None:
                 original_key = st.session_state.get("editing_registro_key", "")
                 if editing_mode and original_key and original_key != key:
                     st.session_state.registros.pop(original_key, None)
+                detalle_recogido = recoger_detalle_alumnos_desde_widgets(total_form)
+                patron_global = primer_patron_deslizante_para_campos_globales(detalle_recogido)
                 st.session_state.registros[key] = {
                     "Nivel Estudio I": st.session_state.sel_nivel_i,
                     "Nivel Estudio II": st.session_state.sel_nivel_ii,
@@ -4077,13 +4381,13 @@ def page_entrada_datos() -> None:
                     "Alumnos tarde": int(st.session_state.get("alumnos_tarde", 0) or 0),
                     "Alumnos rotatorio": int(st.session_state.get("alumnos_rotatorio", 0) or 0),
                     "Alumnos deslizante": int(st.session_state.get("alumnos_deslizante", 0) or 0),
-                    "Deslizante lunes": st.session_state.get("deslizante_lunes", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
-                    "Deslizante martes": st.session_state.get("deslizante_martes", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
-                    "Deslizante miércoles": st.session_state.get("deslizante_miercoles", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
-                    "Deslizante jueves": st.session_state.get("deslizante_jueves", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
-                    "Deslizante viernes": st.session_state.get("deslizante_viernes", "") if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante lunes": patron_global["lunes"] if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante martes": patron_global["martes"] if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante miércoles": patron_global["miercoles"] if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante jueves": patron_global["jueves"] if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
+                    "Deslizante viernes": patron_global["viernes"] if int(st.session_state.get("alumnos_deslizante", 0) or 0) > 0 else "",
                     OBS_TITULACION_DISPLAY: st.session_state.get("observaciones_titulacion", ""),
-                    DETALLE_ALUMNOS_DISPLAY: recoger_detalle_alumnos_desde_widgets(total_form),
+                    DETALLE_ALUMNOS_DISPLAY: detalle_recogido,
                 }
                 audit_event("registro_actualizado", f"{st.session_state.sel_titulacion} | {int(st.session_state.numero_alumnos)} alumnos | turnos {suma_turnos_form}")
                 if editing_mode:
@@ -4204,7 +4508,7 @@ def page_resumen_descarga() -> None:
     excel_bytes = build_output_excel()
 
     st.subheader("Resumen de datos introducidos")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(preparar_registros_para_visualizacion(df), use_container_width=True, hide_index=True)
     col_estado, col_total = st.columns(2)
     with col_estado:
         st.metric("Estado actual", st.session_state.get("draft_estado", "borrador").upper())
@@ -5455,7 +5759,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.1 beta 3", "Corrección de valores NaN al registrar publicaciones multiusuario en Supabase."),
         ("DCD 1.2.1 beta 4", "Consolidación parcial manual por admin para centros multiusuario incompletos."),
         ("DCD 1.2.2 beta 1", "Servicios y curso/año voluntarios por alumno, con exportación a Excel en hoja Detalle_Alumnos."),
-        ("DCD 1.2.2 RC1", "Ajuste de visualización de Detalle alumnos en la tabla de registros introducidos."),
+        ("DCD 1.2.2 RC2", "Ajuste de visualización de Detalle alumnos en la tabla de registros introducidos."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)

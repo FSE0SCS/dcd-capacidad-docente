@@ -465,3 +465,7 @@ Se inicia la fase multiusuario por centro docente. La primera beta añade una pe
 ## DCD 1.2.2 RC1
 
 Versión candidata con servicio y curso/año por alumno, consolidando las funcionalidades validadas en beta 2.
+
+## DCD 1.2.2 RC2
+
+Versión candidata con turnos deslizantes por alumno, Máster/Otro en universitario y titulación libre reutilizable desde registros históricos.
