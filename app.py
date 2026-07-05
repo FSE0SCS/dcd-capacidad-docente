@@ -5,7 +5,7 @@
 #
 # Desarrollador / creador del programa: Alberto Cabrera
 # Responsable funcional del proyecto: Alberto Cabrera
-# Versión: DCD 1.2.2 RC2
+# Versión: DCD 1.2.2 estable
 # Año: 2026
 #
 # Nota de autoría:
@@ -54,7 +54,7 @@ except Exception:
 # =========================================================
 # CONFIGURACIÓN GENERAL
 # =========================================================
-APP_VERSION = "DCD 1.2.2 RC2"
+APP_VERSION = "DCD 1.2.2 estable"
 APP_TITLE = "DATOS CAPACIDAD DOCENTE (DCD 1.0)"
 APP_AUTHOR = "Alberto Cabrera"
 APP_CREATOR = "Alberto Cabrera"
@@ -358,7 +358,7 @@ def init_session_state() -> None:
 def normalizar_detalle_alumnos(value, total: int | None = None) -> list[dict]:
     """Normaliza el detalle opcional por alumno.
 
-    Formato interno/JSON ampliado desde DCD 1.2.2 RC2:
+    Formato interno/JSON ampliado desde DCD 1.2.2 estable:
     [{"alumno": 1, "servicio": "...", "curso": "...", "es_deslizante": true,
       "deslizante_lunes": "M", ...}, ...]
 
@@ -968,7 +968,7 @@ def build_turnos_tables(registros_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
 def build_detalle_alumnos_table(registros_df: pd.DataFrame) -> pd.DataFrame:
     """Construye la hoja Detalle_Alumnos para Excel admin/consulta.
 
-    Desde DCD 1.2.2 RC2 incluye, además de Servicio y Curso/año,
+    Desde DCD 1.2.2 estable incluye, además de Servicio y Curso/año,
     el patrón semanal individual de cada alumno en turno deslizante.
     """
     cols = [
@@ -1052,7 +1052,7 @@ def load_catalogo() -> pd.DataFrame:
 
     df = df[df["Titulación"].notna() & (df["Titulación"].astype(str).str.strip() != "")]
 
-    # DCD 1.2.2 RC2: opciones universitarias adicionales con titulación libre.
+    # DCD 1.2.2 estable: opciones universitarias adicionales con titulación libre.
     # Se añaden al catálogo en memoria para que aparezcan en los selectores sin modificar el Excel base.
     extra_rows = []
     for nivel_ii_extra in ["Máster", "Otro"]:
@@ -5759,7 +5759,7 @@ def render_admin_historial_versiones() -> None:
         ("DCD 1.2.1 beta 3", "Corrección de valores NaN al registrar publicaciones multiusuario en Supabase."),
         ("DCD 1.2.1 beta 4", "Consolidación parcial manual por admin para centros multiusuario incompletos."),
         ("DCD 1.2.2 beta 1", "Servicios y curso/año voluntarios por alumno, con exportación a Excel en hoja Detalle_Alumnos."),
-        ("DCD 1.2.2 RC2", "Ajuste de visualización de Detalle alumnos en la tabla de registros introducidos."),
+        ("DCD 1.2.2 estable", "Ajuste de visualización de Detalle alumnos en la tabla de registros introducidos."),
     ]
     df_versiones = pd.DataFrame(versiones, columns=["Versión", "Cambios principales"])
     st.dataframe(df_versiones, use_container_width=True, hide_index=True)
