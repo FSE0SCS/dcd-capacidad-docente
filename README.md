@@ -469,7 +469,3 @@ Versión candidata con servicio y curso/año por alumno, consolidando las funcio
 ## DCD 1.2.2 RC2
 
 Versión candidata con turnos deslizantes por alumno, Máster/Otro en universitario y titulación libre reutilizable desde registros históricos.
-
-## DCD 1.2.2 estable
-
-Versión estable con turnos por titulación, multiusuario por centro, consolidación parcial, servicio/curso por alumno, patrón deslizante por alumno y titulación libre para Universitario + Máster/Otro.

@@ -110,7 +110,3 @@ Versión candidata para revisión final de la fase de servicios y curso/año por
 ## DCD 1.2.2 RC2
 
 Versión candidata con mejoras finales sobre la RC1: turnos deslizantes por alumno, Máster/Otro en universitario y titulaciones libres reutilizables. No requiere SQL nuevo.
-
-## DCD 1.2.2 estable
-
-Versión estable de cierre de la fase de servicios/curso por alumno y mejoras de turnos deslizantes. Incluye las funcionalidades validadas en RC2 y queda preparada para fusión o despliegue final.
